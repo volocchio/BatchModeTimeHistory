@@ -1,0 +1,25 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter and Streamlit
+*.ipynb_checkpoints
+.streamlit/
+
+# Environments
+.env/
+.venv/
+venv/
+env/
+
+# Data files
+airports.csv
+*.log
+*.db
+
+# OS / Editor stuff
+.DS_Store
+*.swp
+*.bak
