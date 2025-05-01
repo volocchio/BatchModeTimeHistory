@@ -26,7 +26,7 @@ with col2:
 
 # Aircraft model selection
 aircraft_types = ["CJ", "CJ1", "CJ1+", "M2", "CJ2", "CJ2+", "CJ3", "CJ3+"]
-aircraft_model = st.selectbox("Aircraft Model", aircraft_types, index=aircraft_types.index("CJ1") if "CJ1" in aircraft_types else 0)
+aircraft_model = st.selectbox("Aircraft Model", aircraft_types, index=aircraft_types.index("CJ1") if "CJ1" in aircraft_types else 0, key="aircraft_model")
 
 # Wing type selection
 mods_available = [m for (a, m) in AIRCRAFT_CONFIG if a == aircraft_model]
@@ -34,7 +34,7 @@ if not mods_available:
     st.error(f"No modifications available for aircraft model {aircraft_model}.")
     st.stop()
 st.write(f"Available wing types for {aircraft_model}: {mods_available}")
-wing_type = st.radio("Wing Type", ["Flatwing", "Tamarack", "Comparison between Flatwing and Tamarack"], index=0)
+wing_type = st.radio("Wing Type", ["Flatwing", "Tamarack", "Comparison between Flatwing and Tamarack"], index=0, key="wing_type")
 if wing_type != "Comparison between Flatwing and Tamarack" and wing_type not in mods_available:
     st.error(f"Wing type '{wing_type}' is not available for aircraft model {aircraft_model}. Available options: {mods_available}")
     st.stop()
@@ -98,18 +98,17 @@ else:
 initial_payload = max(0, initial_payload)
 initial_fuel = max(0, initial_fuel)
 
-# Detect changes
-model_changed = st.session_state.get('aircraft_model_prev') != aircraft_model
-wing_changed = st.session_state.get('wing_type_prev') != wing_type
-weight_changed = st.session_state.get('weight_option_prev') != weight_option
+# UI state logic (only update if values actually changed)
+if 'prev_config' not in st.session_state:
+    st.session_state.prev_config = (aircraft_model, wing_type, weight_option)
 
-if model_changed or wing_changed or weight_changed:
+config_changed = st.session_state.prev_config != (aircraft_model, wing_type, weight_option)
+
+if config_changed:
     st.session_state['payload_input'] = int(initial_payload)
     st.session_state['fuel_input'] = int(initial_fuel)
     st.session_state['reserve_fuel_input'] = int(reserve_fuel_default)
-    st.session_state['aircraft_model_prev'] = aircraft_model
-    st.session_state['wing_type_prev'] = wing_type
-    st.session_state['weight_option_prev'] = weight_option
+    st.session_state.prev_config = (aircraft_model, wing_type, weight_option)
 
 # Inputs
 payload_input = st.number_input(
@@ -151,8 +150,6 @@ cruise_altitude = st.number_input(
     step=1000,
     key="cruise_altitude"
 )
-
-# (The rest of the file remains unchanged)
 
 # (The rest of the file remains unchanged)
 
