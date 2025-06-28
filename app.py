@@ -15,50 +15,67 @@ and visualizes the flight profile with charts and range rings.
 
 # Load airports data
 airports_df = load_airports()
-airport_ids = airports_df["ident"].tolist()
-
-# Airport selection
-col1, col2 = st.columns(2)
-with col1:
-    departure_airport = st.selectbox("Departure Airport", airport_ids, index=airport_ids.index("KSZT") if "KSZT" in airport_ids else 0)
-with col2:
-    arrival_airport = st.selectbox("Arrival Airport", airport_ids, index=airport_ids.index("KSJT") if "KSJT" in airport_ids else 1)
+airport_display_names = airports_df["display_name"].tolist()
 
 # Aircraft model selection
 aircraft_types = ["CJ", "CJ1", "CJ1+", "M2", "CJ2", "CJ2+", "CJ3", "CJ3+"]
 aircraft_model = st.selectbox("Aircraft Model", aircraft_types, index=aircraft_types.index("CJ1") if "CJ1" in aircraft_types else 0, key="aircraft_model")
 
-# Wing type selection
+# Load aircraft config first
 mods_available = [m for (a, m) in AIRCRAFT_CONFIG if a == aircraft_model]
 if not mods_available:
     st.error(f"No modifications available for aircraft model {aircraft_model}.")
     st.stop()
+def_config = "Tamarack" if "Tamarack" in mods_available else "Flatwing"
+config = AIRCRAFT_CONFIG.get((aircraft_model, def_config))
+if config:
+    _, _, _, _, _, _, _, _, ceiling, _, _, _, _, _, _, _, _, _, bow, mzfw, mrw, mtow, max_fuel, taxi_fuel_default, reserve_fuel_default, _, _, _, _, _, _, _, _, _, _ = config
+    max_payload = mzfw - bow
+
+# Airport selection
+col1, col2 = st.columns(2)
+with col1:
+    departure_airport = st.selectbox(
+        "Departure Airport",
+        airport_display_names,
+        index=next((i for i, name in enumerate(airport_display_names) if "KSZT" in name), 0)
+    )
+with col2:
+    arrival_airport = st.selectbox(
+        "Arrival Airport",
+        airport_display_names,
+        index=next((i for i, name in enumerate(airport_display_names) if "KSAN" in name), 0)
+    )
+
+# Get airport codes from display names
+dep_airport_code = airports_df[airports_df["display_name"] == departure_airport]["ident"].iloc[0]
+arr_airport_code = airports_df[airports_df["display_name"] == arrival_airport]["ident"].iloc[0]
+
+# Calculate and display range and bearing
+dep_info = airports_df[airports_df["ident"] == dep_airport_code]
+arr_info = airports_df[airports_df["ident"] == arr_airport_code]
+if dep_info.empty or arr_info.empty:
+    st.error("Invalid airport code(s). Please check selection.")
+    st.stop()
+
+dep_lat, dep_lon, elev_dep = dep_info.iloc[0][["latitude_deg", "longitude_deg", "elevation_ft"]]
+arr_lat, arr_lon, elev_arr = arr_info.iloc[0][["latitude_deg", "longitude_deg", "elevation_ft"]]
+distance_nm, bearing_deg = haversine_with_bearing(dep_lat, dep_lon, arr_lat, arr_lon)
+
+# Display range and bearing
+st.markdown("---")  # Add a horizontal line for separation
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("Distance", f"{distance_nm:.1f} NM")
+with col2:
+    st.metric("Bearing", f"{bearing_deg:.1f}°")
+
+# Wing type selection
 st.write(f"Available wing types for {aircraft_model}: {mods_available}")
 wing_type = st.radio("Wing Type", ["Flatwing", "Tamarack", "Comparison between Flatwing and Tamarack"], index=0, key="wing_type")
 if wing_type != "Comparison between Flatwing and Tamarack" and wing_type not in mods_available:
     st.error(f"Wing type '{wing_type}' is not available for aircraft model {aircraft_model}. Available options: {mods_available}")
     st.stop()
-
-# Sidebar for aircraft images
-with st.sidebar:
-    st.header("Aircraft Models")
-    image_path_flatwing = f"images/flatwing_{aircraft_model}.jpg"
-    image_path_tamarack = f"images/tamarack_{aircraft_model}.jpg"
-    try:
-        st.image(image_path_flatwing, caption=f"Flatwing {aircraft_model}", use_container_width=True)
-    except FileNotFoundError:
-        st.warning(f"Image not found: {image_path_flatwing}")
-    try:
-        st.image(image_path_tamarack, caption=f"Tamarack {aircraft_model}", use_container_width=True)
-    except FileNotFoundError:
-        st.warning(f"Image not found: {image_path_tamarack}")
-
-# Load aircraft config
-def_config = "Tamarack" if "Tamarack" in mods_available else "Flatwing"
-config = AIRCRAFT_CONFIG.get((aircraft_model, def_config))
-if config:
-    _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, ceiling, bow, mzfw, mrw, mtow, max_fuel, taxi_fuel_default, reserve_fuel_default, _, _, _, _, _, _, _, _, _, _ = config
-    max_payload = mzfw - bow
 
 # Weight mode selection
 weight_option = st.radio("Weight Configuration", [
@@ -98,23 +115,11 @@ else:
 initial_payload = max(0, initial_payload)
 initial_fuel = max(0, initial_fuel)
 
-# UI state logic (only update if values actually changed)
-if 'prev_config' not in st.session_state:
-    st.session_state.prev_config = (aircraft_model, wing_type, weight_option)
-
-config_changed = st.session_state.prev_config != (aircraft_model, wing_type, weight_option)
-
-if config_changed:
-    st.session_state['payload_input'] = int(initial_payload)
-    st.session_state['fuel_input'] = int(initial_fuel)
-    st.session_state['reserve_fuel_input'] = int(reserve_fuel_default)
-    st.session_state.prev_config = (aircraft_model, wing_type, weight_option)
-
 # Inputs
 payload_input = st.number_input(
     "Payload (lb)",
     min_value=0,
-    value=st.session_state.get('payload_input', int(initial_payload)),
+    value=int(initial_payload),
     step=100,
     key="payload_input"
 )
@@ -122,7 +127,7 @@ payload_input = st.number_input(
 fuel_input = st.number_input(
     "Initial Fuel (lb)",
     min_value=0,
-    value=st.session_state.get('fuel_input', int(initial_fuel)),
+    value=int(initial_fuel),
     step=100,
     key="fuel_input"
 )
@@ -130,7 +135,7 @@ fuel_input = st.number_input(
 reserve_fuel = st.number_input(
     "Reserve Fuel (lb)",
     min_value=0,
-    value=st.session_state.get('reserve_fuel_input', int(reserve_fuel_default)),
+    value=int(reserve_fuel_default),
     step=10,
     key="reserve_fuel_input"
 )
@@ -151,20 +156,30 @@ cruise_altitude = st.number_input(
     key="cruise_altitude"
 )
 
-# (The rest of the file remains unchanged)
-
 # Other settings
 flap_option = st.radio("Takeoff Flaps", ["Flap 0", "Flaps 15"], index=0)
 takeoff_flap = 0 if flap_option == "Flap 0" else 1
 winds_temps_source = st.radio("Winds and Temps Aloft Source", ["Current Conditions", "Summer Average", "Winter Average"], index=0)
-cruise_altitude = st.number_input("Cruise Altitude (ft)", min_value=0, value=41000, step=1000)
 isa_dev = int(st.number_input("ISA Deviation (C)", value=0.0, step=1.0))
 v1_cut_enabled = st.checkbox("Enable V1 Cut Simulation (Single Engine)", value=False)
 
-# Run simulation
+# Sidebar for aircraft images
+with st.sidebar:
+    st.header("Aircraft Models")
+    image_path_flatwing = f"images/flatwing_{aircraft_model}.jpg"
+    image_path_tamarack = f"images/tamarack_{aircraft_model}.jpg"
+    try:
+        st.image(image_path_flatwing, caption=f"Flatwing {aircraft_model}", use_container_width=True)
+    except FileNotFoundError:
+        st.warning(f"Image not found: {image_path_flatwing}")
+    try:
+        st.image(image_path_tamarack, caption=f"Tamarack {aircraft_model}", use_container_width=True)
+    except FileNotFoundError:
+        st.warning(f"Image not found: {image_path_tamarack}")
+
 if st.button("Run Simulation 🚀"):
-    dep_info = airports_df[airports_df["ident"] == departure_airport]
-    arr_info = airports_df[airports_df["ident"] == arrival_airport]
+    dep_info = airports_df[airports_df["ident"] == dep_airport_code]
+    arr_info = airports_df[airports_df["ident"] == arr_airport_code]
     if dep_info.empty or arr_info.empty:
         st.error("Invalid airport code(s). Please check selection.")
         st.stop()
@@ -176,7 +191,6 @@ if st.button("Run Simulation 🚀"):
         st.error("Invalid aircraft config!")
         st.stop()
 
-    distance_nm, bearing_deg = haversine_with_bearing(dep_lat, dep_lon, arr_lat, arr_lon)
     tamarack_data = pd.DataFrame()
     tamarack_results = {}
     flatwing_data = pd.DataFrame()
@@ -185,22 +199,22 @@ if st.button("Run Simulation 🚀"):
     if wing_type == "Comparison between Flatwing and Tamarack":
         if "Tamarack" in mods_available:
             tamarack_data, tamarack_results, dep_lat, dep_lon, arr_lat, arr_lon = run_simulation(
-                departure_airport, arrival_airport, aircraft_model, "Tamarack", takeoff_flap,
+                dep_airport_code, arr_airport_code, aircraft_model, "Tamarack", takeoff_flap,
                 payload_input, fuel_input, taxi_fuel, reserve_fuel, cruise_altitude,
                 winds_temps_source, v1_cut_enabled)
         if "Flatwing" in mods_available:
-            flatwing_data, flatwing_results, _, _, _, _ = run_simulation(
-                departure_airport, arrival_airport, aircraft_model, "Flatwing", takeoff_flap,
+            flatwing_data, flatwing_results, dep_lat, dep_lon, arr_lat, arr_lon = run_simulation(
+                dep_airport_code, arr_airport_code, aircraft_model, "Flatwing", takeoff_flap,
                 payload_input, fuel_input, taxi_fuel, reserve_fuel, cruise_altitude,
                 winds_temps_source, v1_cut_enabled)
     elif wing_type == "Tamarack":
         tamarack_data, tamarack_results, dep_lat, dep_lon, arr_lat, arr_lon = run_simulation(
-            departure_airport, arrival_airport, aircraft_model, "Tamarack", takeoff_flap,
+            dep_airport_code, arr_airport_code, aircraft_model, "Tamarack", takeoff_flap,
             payload_input, fuel_input, taxi_fuel, reserve_fuel, cruise_altitude,
             winds_temps_source, v1_cut_enabled)
     elif wing_type == "Flatwing":
         flatwing_data, flatwing_results, dep_lat, dep_lon, arr_lat, arr_lon = run_simulation(
-            departure_airport, arrival_airport, aircraft_model, "Flatwing", takeoff_flap,
+            dep_airport_code, arr_airport_code, aircraft_model, "Flatwing", takeoff_flap,
             payload_input, fuel_input, taxi_fuel, reserve_fuel, cruise_altitude,
             winds_temps_source, v1_cut_enabled)
 
@@ -212,6 +226,7 @@ if st.button("Run Simulation 🚀"):
             end_idx = flatwing_data[flatwing_data['Segment'] == 3].index[-1] if not flatwing_data[flatwing_data['Segment'] == 3].empty else 0
             flatwing_data = flatwing_data.iloc[:end_idx + 1]
 
+    # Display the map first
     display_simulation_results(
         tamarack_data, tamarack_results,
         flatwing_data, flatwing_results,
@@ -220,6 +235,10 @@ if st.button("Run Simulation 🚀"):
         distance_nm, bearing_deg,
         winds_temps_source,
         cruise_altitude,
-        departure_airport, arrival_airport,
-        calculate_range_rings
+        dep_airport_code, arr_airport_code,
+        calculate_range_rings,
+        fuel_input
     )
+
+    # Ensure V-speeds are not printed prematurely by run_simulation
+    # (This is handled by moving V-speed display logic to display_simulation_results if needed)

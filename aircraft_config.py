@@ -10,7 +10,7 @@ for different aircraft models and modifications.
 # Index 0:  s           - Wing area (ft^2)
 # Index 1:  b           - Wing span (ft)
 # Index 2:  e           - Oswald efficiency factor
-# Index 3:  h           - Wing height (ft)
+# Index 3:  h           - Winglet height (ft)
 # Index 4:  sweep_25c   - Wing sweep at 25% chord (degrees)
 # Index 5:  SFC         - Specific Fuel Consumption (lb/hr/lb)
 # Index 6:  engines     - Number of engines
