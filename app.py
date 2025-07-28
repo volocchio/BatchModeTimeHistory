@@ -129,35 +129,39 @@ with st.sidebar:
 
     # Weight inputs - Flatwing
     st.subheader('Flatwing Weight Adjustment')
-    col1, col2 = st.columns(2)
+    
+    # Create three columns for the inputs
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        payload_input_f = st.number_input(
-            "Flatwing Payload (lb)",
+        # First column - BOW and Payload
+        bow_f = st.number_input(
+            "BOW (lb)",
             min_value=0,
-            max_value=int(max_payload),
+            max_value=int(mzfw),
+            value=int(bow),
+            step=100,
+            help="Basic Operating Weight (Empty Weight + pilot)",
+            key="bow_input_flatwing"
+        )
+        
+        # Update max payload based on BOW
+        max_payload_f = max(0, mzfw - bow_f)
+        
+        payload_input_f = st.number_input(
+            "Payload (lb)",
+            min_value=0,
+            max_value=int(max_payload_f),
             value=st.session_state.initial_values.get('payload', int(initial_payload)),
             step=100,
-            help=f"Maximum payload: {int(max_payload):,} lb",
+            help=f"Maximum payload: {int(max_payload_f):,} lb (MZFW - BOW)",
             key="payload_input_flatwing"
         )
-        reserve_fuel_f = st.number_input(
-            "Flatwing Reserve Fuel (lb)",
-            min_value=0,
-            value=st.session_state.initial_values.get('reserve_fuel', int(reserve_fuel_default)),
-            step=10,
-            key="reserve_fuel_input_flatwing"
-        )
-        cruise_altitude_f = st.number_input(
-            "Flatwing Cruise Altitude (ft)",
-            min_value=0,
-            max_value=int(ceiling),
-            value=st.session_state.initial_values.get('cruise_altitude', int(ceiling)),
-            step=1000,
-            key="cruise_altitude_input_flatwing"
-        )
+    
     with col2:
+        # Second column - Fuel inputs
         fuel_input_f = st.number_input(
-            "Flatwing Fuel (lb)",
+            "Fuel (lb)",
             min_value=0,
             max_value=int(max_fuel),
             value=st.session_state.initial_values.get('fuel', int(initial_fuel)),
@@ -165,45 +169,69 @@ with st.sidebar:
             help=f"Maximum fuel: {int(max_fuel):,} lb",
             key="fuel_input_flatwing"
         )
+        
+        reserve_fuel_f = st.number_input(
+            "Reserve Fuel (lb)",
+            min_value=0,
+            value=st.session_state.initial_values.get('reserve_fuel', int(reserve_fuel_default)),
+            step=10,
+            key="reserve_fuel_input_flatwing"
+        )
+    
+    with col3:
+        # Third column - Taxi and Altitude
         taxi_fuel_f = st.number_input(
-            "Flatwing Taxi Fuel (lb)",
+            "Taxi Fuel (lb)",
             min_value=0,
             value=st.session_state.initial_values.get('taxi_fuel', int(taxi_fuel_default)),
             step=10,
             key="taxi_fuel_input_flatwing"
         )
-
-    # Weight inputs - Tamarack
-    st.subheader('Tamarack Weight Adjustment')
-    col1, col2 = st.columns(2)
-    with col1:
-        payload_input_t = st.number_input(
-            "Tamarack Payload (lb)",
-            min_value=0,
-            max_value=int(max_payload),
-            value=st.session_state.initial_values.get('payload', int(initial_payload)),
-            step=100,
-            help=f"Maximum payload: {int(max_payload):,} lb",
-            key="payload_input_tamarack"
-        )
-        reserve_fuel_t = st.number_input(
-            "Tamarack Reserve Fuel (lb)",
-            min_value=0,
-            value=st.session_state.initial_values.get('reserve_fuel', int(reserve_fuel_default)),
-            step=10,
-            key="reserve_fuel_input_tamarack"
-        )
-        cruise_altitude_t = st.number_input(
-            "Tamarack Cruise Altitude (ft)",
+        
+        cruise_altitude_f = st.number_input(
+            "Cruise Altitude Goal (ft)",
             min_value=0,
             max_value=int(ceiling),
             value=st.session_state.initial_values.get('cruise_altitude', int(ceiling)),
             step=1000,
-            key="cruise_altitude_input_tamarack"
+            key="cruise_altitude_input_flatwing"
         )
-    with col2:
+
+    # Weight inputs - Tamarack
+    st.subheader('Tamarack Weight Adjustment')
+    
+    # Create three columns for the inputs
+    col4, col5, col6 = st.columns(3)
+    
+    with col4:
+        # First column - BOW and Payload
+        bow_t = st.number_input(
+            "BOW (lb)",
+            min_value=0,
+            max_value=int(mzfw),
+            value=int(bow),
+            step=100,
+            help="Basic Operating Weight (Empty Weight + pilot)",
+            key="bow_input_tamarack"
+        )
+        
+        # Update max payload based on BOW
+        max_payload_t = max(0, mzfw - bow_t)
+        
+        payload_input_t = st.number_input(
+            "Payload (lb)",
+            min_value=0,
+            max_value=int(max_payload_t),
+            value=st.session_state.initial_values.get('payload', int(initial_payload)),
+            step=100,
+            help=f"Maximum payload: {int(max_payload_t):,} lb (MZFW - BOW)",
+            key="payload_input_tamarack"
+        )
+    
+    with col5:
+        # Second column - Fuel inputs
         fuel_input_t = st.number_input(
-            "Tamarack Fuel (lb)",
+            "Fuel (lb)",
             min_value=0,
             max_value=int(max_fuel),
             value=st.session_state.initial_values.get('fuel', int(initial_fuel)),
@@ -211,12 +239,32 @@ with st.sidebar:
             help=f"Maximum fuel: {int(max_fuel):,} lb",
             key="fuel_input_tamarack"
         )
+        
+        reserve_fuel_t = st.number_input(
+            "Reserve Fuel (lb)",
+            min_value=0,
+            value=st.session_state.initial_values.get('reserve_fuel', int(reserve_fuel_default)),
+            step=10,
+            key="reserve_fuel_input_tamarack"
+        )
+    
+    with col6:
+        # Third column - Taxi and Altitude
         taxi_fuel_t = st.number_input(
-            "Tamarack Taxi Fuel (lb)",
+            "Taxi Fuel (lb)",
             min_value=0,
             value=st.session_state.initial_values.get('taxi_fuel', int(taxi_fuel_default)),
             step=10,
             key="taxi_fuel_input_tamarack"
+        )
+        
+        cruise_altitude_t = st.number_input(
+            "Cruise Altitude Goal (ft)",
+            min_value=0,
+            max_value=int(ceiling),
+            value=st.session_state.initial_values.get('cruise_altitude', int(ceiling)),
+            step=1000,
+            key="cruise_altitude_input_tamarack"
         )
 
     # Wing type selection
@@ -340,36 +388,38 @@ if st.button("Run Simulation"):
     # Calculate current weights using user inputs
     if wing_type == "Comparison":
         # Flatwing weights
-        zfw_f = bow + payload_f  # Zero Fuel Weight
-        rw_f = zfw_f + fuel_f  # Ramp Weight
+        zfw_f = bow_f + payload_input_f  # Zero Fuel Weight
+        rw_f = zfw_f + fuel_input_f  # Ramp Weight
         tow_f = rw_f - taxi_fuel_f  # Takeoff Weight (after taxiing)
-        mission_fuel_f = fuel_f - reserve_fuel_f - taxi_fuel_f
+        mission_fuel_f = fuel_input_f - reserve_fuel_f - taxi_fuel_f
         
         # Tamarack weights
-        zfw_t = bow + payload_t  # Zero Fuel Weight
-        rw_t = zfw_t + fuel_t  # Ramp Weight
+        zfw_t = bow_t + payload_input_t  # Zero Fuel Weight
+        rw_t = zfw_t + fuel_input_t  # Ramp Weight
         tow_t = rw_t - taxi_fuel_t  # Takeoff Weight (after taxiing)
-        mission_fuel_t = fuel_t - reserve_fuel_t - taxi_fuel_t
+        mission_fuel_t = fuel_input_t - reserve_fuel_t - taxi_fuel_t
     elif wing_type == "Flatwing":
-        zfw_f = bow + payload_f  # Zero Fuel Weight
-        rw_f = zfw_f + fuel_f  # Ramp Weight
+        zfw_f = bow_f + payload_input_f  # Zero Fuel Weight
+        rw_f = zfw_f + fuel_input_f  # Ramp Weight
         tow_f = rw_f - taxi_fuel_f  # Takeoff Weight (after taxiing)
-        mission_fuel_f = fuel_f - reserve_fuel_f - taxi_fuel_f
+        mission_fuel_f = fuel_input_f - reserve_fuel_f - taxi_fuel_f
         
+        # Set Tamarack weights to 0 for comparison
         zfw_t = 0
         rw_t = 0
         tow_t = 0
         mission_fuel_t = 0
-    elif wing_type == "Tamarack":
+    else:  # Tamarack
+        # Set Flatwing weights to 0 for comparison
         zfw_f = 0
         rw_f = 0
         tow_f = 0
         mission_fuel_f = 0
         
-        zfw_t = bow + payload_t  # Zero Fuel Weight
-        rw_t = zfw_t + fuel_t  # Ramp Weight
+        zfw_t = bow_t + payload_input_t  # Zero Fuel Weight
+        rw_t = zfw_t + fuel_input_t  # Ramp Weight
         tow_t = rw_t - taxi_fuel_t  # Takeoff Weight (after taxiing)
-        mission_fuel_t = fuel_t - reserve_fuel_t - taxi_fuel_t
+        mission_fuel_t = fuel_input_t - reserve_fuel_t - taxi_fuel_t
 
     # Get configurations based on wing type
     if wing_type == "Comparison":
@@ -415,8 +465,8 @@ if st.button("Run Simulation"):
             ],
             'Weight (lb)': [
                 f"{bow_f:,.0f}",
-                f"{payload_f:,.0f}",
-                f"{fuel_f:,.0f}",
+                f"{payload_input_f:,.0f}",
+                f"{fuel_input_f:,.0f}",
                 f"{reserve_fuel_f:,.0f}",
                 f"{taxi_fuel_f:,.0f}",
                 f"{mission_fuel_f:,.0f}",
@@ -445,8 +495,8 @@ if st.button("Run Simulation"):
             ],
             'Weight (lb)': [
                 f"{bow_t:,.0f}",
-                f"{payload_t:,.0f}",
-                f"{fuel_t:,.0f}",
+                f"{payload_input_t:,.0f}",
+                f"{fuel_input_t:,.0f}",
                 f"{reserve_fuel_t:,.0f}",
                 f"{taxi_fuel_t:,.0f}",
                 f"{mission_fuel_t:,.0f}",
@@ -571,23 +621,25 @@ if st.button("Run Simulation"):
             st.stop()
 
         if wing_type == "Flatwing":
-            payload = payload_f
-            fuel = fuel_f
+            payload = payload_input_f
+            fuel = fuel_input_f
             taxi_fuel = taxi_fuel_f
             reserve_fuel = reserve_fuel_f
-            mission_fuel = mission_fuel_f
-            zfw = zfw_f
-            rw = rw_f
-            tow = tow_f
+            mission_fuel = fuel_input_f - reserve_fuel_f - taxi_fuel_f
+            zfw = bow_f + payload_input_f  # Zero Fuel Weight
+            rw = zfw + fuel_input_f  # Ramp Weight
+            tow = rw - taxi_fuel_f  # Takeoff Weight (after taxiing)
+            bow = bow_f  # Use the input BOW value
         else:  # Tamarack
-            payload = payload_t
-            fuel = fuel_t
+            payload = payload_input_t
+            fuel = fuel_input_t
             taxi_fuel = taxi_fuel_t
             reserve_fuel = reserve_fuel_t
-            mission_fuel = mission_fuel_t
-            zfw = zfw_t
-            rw = rw_t
-            tow = tow_t
+            mission_fuel = fuel_input_t - reserve_fuel_t - taxi_fuel_t
+            zfw = bow_t + payload_input_t  # Zero Fuel Weight
+            rw = zfw + fuel_input_t  # Ramp Weight
+            tow = rw - taxi_fuel_t  # Takeoff Weight (after taxiing)
+            bow = bow_t  # Use the input BOW value
 
         weight_df = pd.DataFrame({
             'Component': [
