@@ -1,0 +1,7 @@
+aircraft,mod,flap,isa_dev,cruise_alt,mach,payload,taxi_fuel,reserve_fuel,save_plot,initial_fuel_lb,takeoff_weight_lb,status,error_message,total_dist_nm,total_time_min,fuel_burned_lb,first_level_off_ft,cruise_vktas_kts,cruise_vkias_kts,achieved_alt_ft,altitude_limited,achieved_mach,mach_limited,reserve_fuel_calc_lb
+CJ1,Flatwing,0,-10,41000,0.7,0,100,600,False,3440,10590,ok,,1467.0,258,2740,40737,432,182.0,40737,False,0.65,True,700
+CJ1,Flatwing,0,-10,41000,0.7,230,100,600,False,3320,10700,ok,,1377.0,244,2620,40517,431,182.0,40517,False,0.65,True,700
+CJ1,Flatwing,0,-10,41000,0.7,460,100,600,False,3090,10700,ok,,1236.0,221,2390,40517,429,182.0,40517,False,0.65,True,700
+CJ1,Flatwing,0,-10,41000,0.7,690,100,600,False,2860,10700,ok,,1097.0,198,2160,40517,426,181.0,40517,False,0.64,True,700
+CJ1,Flatwing,0,-10,41000,0.7,920,100,600,False,2630,10700,ok,,958.0,175,1930,40517,424,181.0,40517,False,0.64,True,700
+CJ1,Flatwing,0,-10,41000,0.7,1150,100,600,False,2400,10700,ok,,821.0,153,1700,40517,421,180.0,40517,False,0.64,True,700

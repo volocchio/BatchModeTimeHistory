@@ -1,0 +1,5 @@
+aircraft,mod,flap,isa_dev,mach,cruise_alt,payload,total_dist_nm
+C208B,Flatwing,0,0,0.45,10000,0,n/p
+C208B,Flatwing,0,10,0.45,10000,0,n/p
+C208B,Tamarack,0,0,0.45,10000,0,n/p
+C208B,Tamarack,0,10,0.45,10000,0,n/p
