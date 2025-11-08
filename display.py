@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.graph_objects as go
+import numpy as np
 
 def display_vspeeds(label: str, vspeeds_data: dict, phase: str = "Takeoff"):
     """Display V-speeds for a given flight phase.
@@ -178,6 +179,51 @@ def plot_flight_profiles(tamarack_data, flatwing_data, tamarack_results, flatwin
                 "Altitude (ft)", "Altitude (ft)", "Altitude (ft)",
                 "Mach", "Mach", "Mach")
 
+    # Altitude + TAS and IAS vs Distance
+    fig_tas_ias = go.Figure()
+    # Left axis: Altitude
+    if not tamarack_data.empty and 'Altitude (ft)' in tamarack_data.columns:
+        fig_tas_ias.add_trace(go.Scatter(
+            x=tamarack_data['Distance (NM)'], y=tamarack_data['Altitude (ft)'],
+            name='Altitude (Tamarack)', line=dict(color='blue')
+        ))
+    if not flatwing_data.empty and 'Altitude (ft)' in flatwing_data.columns:
+        fig_tas_ias.add_trace(go.Scatter(
+            x=flatwing_data['Distance (NM)'], y=flatwing_data['Altitude (ft)'],
+            name='Altitude (Flatwing)', line=dict(color='purple')
+        ))
+    # Right axis: TAS and IAS (knots)
+    if not tamarack_data.empty:
+        if 'VKTAS (kts)' in tamarack_data.columns:
+            fig_tas_ias.add_trace(go.Scatter(
+                x=tamarack_data['Distance (NM)'], y=tamarack_data['VKTAS (kts)'],
+                name='TAS (Tamarack)', yaxis='y2', line=dict(color='orange', dash='solid')
+            ))
+        if 'VKIAS (kts)' in tamarack_data.columns:
+            fig_tas_ias.add_trace(go.Scatter(
+                x=tamarack_data['Distance (NM)'], y=tamarack_data['VKIAS (kts)'],
+                name='IAS (Tamarack)', yaxis='y2', line=dict(color='orange', dash='dot')
+            ))
+    if not flatwing_data.empty:
+        if 'VKTAS (kts)' in flatwing_data.columns:
+            fig_tas_ias.add_trace(go.Scatter(
+                x=flatwing_data['Distance (NM)'], y=flatwing_data['VKTAS (kts)'],
+                name='TAS (Flatwing)', yaxis='y2', line=dict(color='red', dash='solid')
+            ))
+        if 'VKIAS (kts)' in flatwing_data.columns:
+            fig_tas_ias.add_trace(go.Scatter(
+                x=flatwing_data['Distance (NM)'], y=flatwing_data['VKIAS (kts)'],
+                name='IAS (Flatwing)', yaxis='y2', line=dict(color='red', dash='dot')
+            ))
+    fig_tas_ias.update_layout(
+        xaxis=dict(title='Distance (NM)'),
+        yaxis=dict(title='Altitude (ft)'),
+        yaxis2=dict(title='Speed (kts)', overlaying='y', side='right'),
+        title='Altitude, TAS and IAS vs. Distance',
+        legend=dict(x=0.01, y=1.15, orientation='h')
+    )
+    st.plotly_chart(fig_tas_ias, use_container_width=True)
+
     for title in [
         ("Rate of Climb vs. Distance", "ROC (fpm)"),
         ("Thrust vs. Distance", "Thrust (lb)"),
@@ -310,9 +356,44 @@ def display_simulation_results(
     isa_dev_c, payload_value
 ):
     st.subheader("Flight Route Map")
-    fig = go.Figure()
+    fig = build_route_map_figure(dep_latitude, dep_longitude, arr_latitude, arr_longitude, distance_nm, departure_airport, arrival_airport)
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Add range rings from departure airport using proper equirectangular projection
+    # Top summary including payload and ISA deviation
+    try:
+        st.info(f"Payload: {payload_value:.0f} lb | ISA Dev: {isa_dev_c:+.0f}°C | Winds/Temps: {winds_temps_source} | Cruise Alt: {cruise_alt:.0f} ft | Initial Fuel: {initial_fuel:.0f} lb")
+    except Exception:
+        st.info(f"ISA Dev: {isa_dev_c:+.0f}°C | Winds/Temps: {winds_temps_source} | Cruise Alt: {cruise_alt:.0f} ft | Initial Fuel: {initial_fuel:.0f} lb")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Tamarack")
+        st.caption(f"Temperature: ISA {isa_dev_c:+.0f}°C")
+        if not tamarack_data.empty:
+            write_metrics_with_headings(tamarack_results, "Tamarack")
+        else:
+            st.info("No Tamarack results to display.")
+
+    with col2:
+        st.subheader("Flatwing")
+        st.caption(f"Temperature: ISA {isa_dev_c:+.0f}°C")
+        if not flatwing_data.empty:
+            write_metrics_with_headings(flatwing_results, "Flatwing")
+        else:
+            st.info("No Flatwing results to display.")
+
+    for results in [tamarack_results, flatwing_results]:
+        if results.get("exceedances"):
+            for msg in results["exceedances"]:
+                st.error(msg)
+        elif results.get("error"):
+            st.error(results["error"])
+
+    plot_flight_profiles(tamarack_data, flatwing_data, tamarack_results, flatwing_results)
+
+def build_route_map_figure(dep_latitude, dep_longitude, arr_latitude, arr_longitude, distance_nm, departure_airport, arrival_airport):
+    fig = go.Figure()
     import math
     
     def calculate_range_ring_equirectangular(center_lat, center_lon, radius_nm, num_points=72):
@@ -428,38 +509,98 @@ def display_simulation_results(
         ),
         title='Flight Route'
     )
-    st.plotly_chart(fig, use_container_width=True)
-    st.success(f"Distance: {distance_nm:.1f} NM | Bearing: {bearing_deg:.1f}°")
+    return fig
 
-    # Top summary including payload and ISA deviation
-    try:
-        st.info(f"Payload: {payload_value:.0f} lb | ISA Dev: {isa_dev_c:+.0f}°C | Winds/Temps: {winds_temps_source} | Cruise Alt: {cruise_alt:.0f} ft | Initial Fuel: {initial_fuel:.0f} lb")
-    except Exception:
-        st.info(f"ISA Dev: {isa_dev_c:+.0f}°C | Winds/Temps: {winds_temps_source} | Cruise Alt: {cruise_alt:.0f} ft | Initial Fuel: {initial_fuel:.0f} lb")
+def build_fuel_remaining_figure(tamarack_data, flatwing_data, tamarack_results, flatwing_results):
+    if not tamarack_data.empty and not flatwing_data.empty:
+        fig = go.Figure()
+        if 'Distance (NM)' in tamarack_data.columns and 'Fuel Remaining (lb)' in tamarack_data.columns:
+            fig.add_trace(go.Scatter(
+                x=tamarack_data['Distance (NM)'],
+                y=tamarack_data['Fuel Remaining (lb)'],
+                mode='lines',
+                name='Tamarack',
+                line=dict(color='red', width=2)
+            ))
+        if 'Distance (NM)' in flatwing_data.columns and 'Fuel Remaining (lb)' in flatwing_data.columns:
+            fig.add_trace(go.Scatter(
+                x=flatwing_data['Distance (NM)'],
+                y=flatwing_data['Fuel Remaining (lb)'],
+                mode='lines',
+                name='Flatwing',
+                line=dict(color='blue', width=2)
+            ))
+        fig.update_layout(
+            title="Fuel Remaining vs Distance - Comparison",
+            xaxis_title="Distance (NM)",
+            yaxis_title="Fuel Remaining (lb)",
+            showlegend=True
+        )
+        return fig
+    if not tamarack_data.empty and isinstance(tamarack_results.get("fuel_distance_plot"), go.Figure):
+        return tamarack_results["fuel_distance_plot"]
+    if not flatwing_data.empty and isinstance(flatwing_results.get("fuel_distance_plot"), go.Figure):
+        return flatwing_results["fuel_distance_plot"]
+    return go.Figure()
 
-    col1, col2 = st.columns(2)
+def build_alt_mach_profile_figure(tamarack_data, flatwing_data):
+    fig = go.Figure()
+    if not tamarack_data.empty:
+        fig.add_trace(go.Scatter(x=tamarack_data['Distance (NM)'], y=tamarack_data['Altitude (ft)'], name='Altitude (Tamarack)', line=dict(color='blue')))
+        if 'Mach' in tamarack_data.columns:
+            fig.add_trace(go.Scatter(x=tamarack_data['Distance (NM)'], y=tamarack_data['Mach'], name='Mach (Tamarack)', yaxis='y2', line=dict(color='orange')))
+    if not flatwing_data.empty:
+        fig.add_trace(go.Scatter(x=flatwing_data['Distance (NM)'], y=flatwing_data['Altitude (ft)'], name='Altitude (Flatwing)', line=dict(color='purple')))
+        if 'Mach' in flatwing_data.columns:
+            fig.add_trace(go.Scatter(x=flatwing_data['Distance (NM)'], y=flatwing_data['Mach'], name='Mach (Flatwing)', yaxis='y2', line=dict(color='red')))
+    fig.update_layout(
+        xaxis=dict(title='Distance (NM)'),
+        yaxis=dict(title='Altitude (ft)'),
+        yaxis2=dict(title='Mach', overlaying='y', side='right'),
+        title='Altitude and Mach vs. Distance'
+    )
+    return fig
 
-    with col1:
-        st.subheader("Tamarack")
-        st.caption(f"Temperature: ISA {isa_dev_c:+.0f}°C")
-        if not tamarack_data.empty:
-            write_metrics_with_headings(tamarack_results, "Tamarack")
-        else:
-            st.info("No Tamarack results to display.")
-
-    with col2:
-        st.subheader("Flatwing")
-        st.caption(f"Temperature: ISA {isa_dev_c:+.0f}°C")
-        if not flatwing_data.empty:
-            write_metrics_with_headings(flatwing_results, "Flatwing")
-        else:
-            st.info("No Flatwing results to display.")
-
-    for results in [tamarack_results, flatwing_results]:
-        if results.get("exceedances"):
-            for msg in results["exceedances"]:
-                st.error(msg)
-        elif results.get("error"):
-            st.error(results["error"])
-
-    plot_flight_profiles(tamarack_data, flatwing_data, tamarack_results, flatwing_results)
+def build_alt_tas_ias_profile_figure(tamarack_data, flatwing_data):
+    fig = go.Figure()
+    # Left axis: Altitude
+    if not tamarack_data.empty and 'Altitude (ft)' in tamarack_data.columns:
+        fig.add_trace(go.Scatter(
+            x=tamarack_data['Distance (NM)'], y=tamarack_data['Altitude (ft)'],
+            name='Altitude (Tamarack)', line=dict(color='blue')
+        ))
+    if not flatwing_data.empty and 'Altitude (ft)' in flatwing_data.columns:
+        fig.add_trace(go.Scatter(
+            x=flatwing_data['Distance (NM)'], y=flatwing_data['Altitude (ft)'],
+            name='Altitude (Flatwing)', line=dict(color='purple')
+        ))
+    # Right axis: TAS and IAS (knots)
+    if not tamarack_data.empty:
+        if 'VKTAS (kts)' in tamarack_data.columns:
+            fig.add_trace(go.Scatter(
+                x=tamarack_data['Distance (NM)'], y=tamarack_data['VKTAS (kts)'],
+                name='TAS (Tamarack)', yaxis='y2', line=dict(color='orange', dash='solid')
+            ))
+        if 'VKIAS (kts)' in tamarack_data.columns:
+            fig.add_trace(go.Scatter(
+                x=tamarack_data['Distance (NM)'], y=tamarack_data['VKIAS (kts)'],
+                name='IAS (Tamarack)', yaxis='y2', line=dict(color='orange', dash='dot')
+            ))
+    if not flatwing_data.empty:
+        if 'VKTAS (kts)' in flatwing_data.columns:
+            fig.add_trace(go.Scatter(
+                x=flatwing_data['Distance (NM)'], y=flatwing_data['VKTAS (kts)'],
+                name='TAS (Flatwing)', yaxis='y2', line=dict(color='red', dash='solid')
+            ))
+        if 'VKIAS (kts)' in flatwing_data.columns:
+            fig.add_trace(go.Scatter(
+                x=flatwing_data['Distance (NM)'], y=flatwing_data['VKIAS (kts)'],
+                name='IAS (Flatwing)', yaxis='y2', line=dict(color='red', dash='dot')
+            ))
+    fig.update_layout(
+        xaxis=dict(title='Distance (NM)'),
+        yaxis=dict(title='Altitude (ft)'),
+        yaxis2=dict(title='Speed (kts)', overlaying='y', side='right'),
+        title='Altitude, TAS and IAS vs. Distance'
+    )
+    return fig
