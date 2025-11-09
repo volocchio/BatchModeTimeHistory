@@ -81,16 +81,16 @@ with st.sidebar:
 
     # Display both aircraft images
     if aircraft_model:
-        try:
-            image_path = f"images/tamarack_{aircraft_model}.jpg"
-            st.image(image_path, caption=f"Tamarack {aircraft_model}", use_container_width=True)
-        except FileNotFoundError:
-            st.warning(f"Tamarack image not found: {image_path}")
-        try:
-            image_path = f"images/flatwing_{aircraft_model}.jpg"
-            st.image(image_path, caption=f"Flatwing {aircraft_model}", use_container_width=True)
-        except FileNotFoundError:
-            st.warning(f"Flatwing image not found: {image_path}")
+        def show_img(prefix, caption):
+            base = f"images/{prefix}_{aircraft_model}"
+            candidates = [base + ext for ext in [".jpg", ".png", ".jpeg", ".webp"]]
+            p = next((c for c in candidates if os.path.isfile(c)), None)
+            if p:
+                st.image(p, caption=caption, use_container_width=True)
+            else:
+                st.info(f"{caption} image not available")
+        show_img("tamarack", f"Tamarack {aircraft_model}")
+        show_img("flatwing", f"Flatwing {aircraft_model}")
 
     # Load aircraft config first
     mods_available = [m for (a, m) in AIRCRAFT_CONFIG if a == aircraft_model]
