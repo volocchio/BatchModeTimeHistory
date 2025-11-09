@@ -1,13 +1,17 @@
 import argparse
 from pathlib import Path
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from itertools import product
 
 import numpy as np
 import pandas as pd
 
 from aircraft_config import AIRCRAFT_CONFIG
+try:
+    from aircraft_config import TURBOPROP_PARAMS
+except ImportError:
+    TURBOPROP_PARAMS = {}
 from simulation import run_simulation
 
 
@@ -78,6 +82,7 @@ def run_single_case(case: dict, hide_mach_limited: bool = False, hide_altitude_l
             case["taxi_fuel"],
             case["reserve_fuel"],
         )
+        kias = case.get("kias")
 
         # Arbitrary route; range_mode ignores route distance triggers
         dep = "KSZT"
@@ -116,6 +121,7 @@ def run_single_case(case: dict, hide_mach_limited: bool = False, hide_altitude_l
             "No Wind",
             False,
             cruise_mach=float(mach),
+            cruise_kias=(float(kias) if kias is not None else None),
             isa_dev_c=float(isa_dev),
             range_mode=True,
         )
@@ -125,8 +131,22 @@ def run_single_case(case: dict, hide_mach_limited: bool = False, hide_altitude_l
         total_time_min = results.get("Total Time (min)")
         fuel_burned_lb = results.get("Total Fuel Burned (lb)")
         first_level_off_ft = results.get("First Level-Off Alt (ft)")
-        cruise_vktas_kts = results.get("Cruise VKTAS (knots)")
-        # Compute representative cruise indicated airspeed (kts) from time history
+        
+        # Compute representative cruise TAS (kts): highest achieved in cruise, prefer seg 7 then 6+7
+        cruise_vktas_kts = None
+        try:
+            if isinstance(df, pd.DataFrame) and "VKTAS (kts)" in df.columns and "Segment" in df.columns:
+                seg7_tas = pd.to_numeric(df.loc[df["Segment"] == 7, "VKTAS (kts)"] , errors="coerce")
+                if seg7_tas.notna().any():
+                    cruise_vktas_kts = float(np.nanmax(seg7_tas))
+                else:
+                    seg67_tas = pd.to_numeric(df.loc[df["Segment"].isin([6, 7]), "VKTAS (kts)"] , errors="coerce")
+                    if seg67_tas.notna().any():
+                        cruise_vktas_kts = float(np.nanmax(seg67_tas))
+        except Exception:
+            cruise_vktas_kts = None
+        
+        # Compute representative cruise IAS (kts): keep median for display stability
         cruise_vkias_kts = None
         try:
             if isinstance(df, pd.DataFrame) and "VKIAS (kts)" in df.columns and "Segment" in df.columns:
@@ -175,8 +195,16 @@ def run_single_case(case: dict, hide_mach_limited: bool = False, hide_altitude_l
             out["altitude_limited"] = True
         try:
             target_mach = float(mach)
-            achieved_mach_raw = float(cruise_vktas_kts) / 661.48 if cruise_vktas_kts is not None else None
-            achieved_mach = float(f"{achieved_mach_raw:.2g}") if achieved_mach_raw is not None else None
+            # Achieved Mach: highest in cruise, prefer seg 7 then 6+7 (direct from time history Mach)
+            achieved_mach = None
+            if isinstance(df, pd.DataFrame) and "Mach" in df.columns and "Segment" in df.columns:
+                seg7_m = pd.to_numeric(df.loc[df["Segment"] == 7, "Mach"], errors="coerce")
+                if seg7_m.notna().any():
+                    achieved_mach = float(np.nanmax(seg7_m))
+                else:
+                    seg67_m = pd.to_numeric(df.loc[df["Segment"].isin([6, 7]), "Mach"], errors="coerce")
+                    if seg67_m.notna().any():
+                        achieved_mach = float(np.nanmax(seg67_m))
             out["achieved_mach"] = achieved_mach
             out["mach_limited"] = achieved_mach is None or (achieved_mach + 1e-3) < target_mach
         except Exception:
@@ -242,11 +270,13 @@ def run_payload_range_batch(
     save_plots: bool = False,
     output_dir: str | Path | None = None,
     mach_values: list[float] | None = None,
+    kias_values: list[float] | None = None,
     alt_values: list[int] | None = None,
     save_timeseries: bool = False,
     save_summary_plots: bool = True,
     hide_mach_limited: bool = False,
     hide_altitude_limited: bool = False,
+    use_threads: bool = False,
 ) -> pd.DataFrame:
     base_ts_dir = Path(output_dir) if output_dir else Path("batch_outputs") / datetime.now().strftime("%Y%m%d_%H%M%S")
     base_ts_dir.mkdir(parents=True, exist_ok=True)
@@ -284,46 +314,87 @@ def run_payload_range_batch(
                     alt_grid = build_alt_grid(ceiling)
             else:
                 alt_grid = build_alt_grid(ceiling)
+            # Determine speed grids
             if mach_values:
                 mach_grid = sorted({float(mv) for mv in mach_values if 0.3 <= float(mv) <= float(mmo)} , reverse=True)
                 if not mach_grid:
                     mach_grid = build_mach_grid(mmo)
             else:
                 mach_grid = build_mach_grid(mmo)
+            kias_grid = None
+            is_turboprop = aircraft in TURBOPROP_PARAMS
+            if is_turboprop and kias_values:
+                kias_grid = sorted({float(kv) for kv in kias_values if 60.0 <= float(kv) <= 300.0}, reverse=True)
+                if len(kias_grid) == 0:
+                    kias_grid = None
+
             payloads = payload_sweep(max_payload, payload_steps)
 
-            for flap, isa_dev, cruise_alt, mach, payload in product(
-                flap_settings, isa_devs, alt_grid, mach_grid, payloads
-            ):
-                case = {
-                    "aircraft": aircraft,
-                    "mod": mod,
-                    "flap": int(flap),
-                    "isa_dev": int(isa_dev),
-                    "cruise_alt": int(cruise_alt),
-                    "mach": float(mach),
-                    "payload": int(payload),
-                    "taxi_fuel": int(taxi_fuel_lb),
-                    "reserve_fuel": int(reserve_default),
-                    "save_plot": bool(save_plots),
-                }
-                if save_plots:
-                    plot_name = f"fuel_vs_distance_{aircraft}_{mod}_flap{flap}_mach{mach:.2f}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.png"
-                    case["plot_path"] = aircraft_dirs[aircraft]["plots"] / plot_name
-                if save_timeseries:
-                    ts_name = f"timeseries_{aircraft}_{mod}_flap{flap}_mach{mach:.2f}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.parquet"
-                    case["timeseries_path"] = aircraft_dirs[aircraft]["timeseries"] / ts_name
-                    case["save_timeseries"] = True
-                cases.append(case)
+            if kias_grid is not None:
+                for flap, isa_dev, cruise_alt, kias, payload in product(
+                    flap_settings, isa_devs, alt_grid, kias_grid, payloads
+                ):
+                    case = {
+                        "aircraft": aircraft,
+                        "mod": mod,
+                        "flap": int(flap),
+                        "isa_dev": int(isa_dev),
+                        "cruise_alt": int(cruise_alt),
+                        "mach": 0.0,
+                        "kias": float(kias),
+                        "payload": int(payload),
+                        "taxi_fuel": int(taxi_fuel_lb),
+                        "reserve_fuel": int(reserve_default),
+                        "save_plot": bool(save_plots),
+                    }
+                    if save_plots:
+                        plot_name = f"fuel_vs_distance_{aircraft}_{mod}_flap{flap}_kias{int(kias)}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.png"
+                        case["plot_path"] = aircraft_dirs[aircraft]["plots"] / plot_name
+                    if save_timeseries:
+                        ts_name = f"timeseries_{aircraft}_{mod}_flap{flap}_kias{int(kias)}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.parquet"
+                        case["timeseries_path"] = aircraft_dirs[aircraft]["timeseries"] / ts_name
+                        case["save_timeseries"] = True
+                    cases.append(case)
+            else:
+                for flap, isa_dev, cruise_alt, mach, payload in product(
+                    flap_settings, isa_devs, alt_grid, mach_grid, payloads
+                ):
+                    case = {
+                        "aircraft": aircraft,
+                        "mod": mod,
+                        "flap": int(flap),
+                        "isa_dev": int(isa_dev),
+                        "cruise_alt": int(cruise_alt),
+                        "mach": float(mach),
+                        "payload": int(payload),
+                        "taxi_fuel": int(taxi_fuel_lb),
+                        "reserve_fuel": int(reserve_default),
+                        "save_plot": bool(save_plots),
+                    }
+                    if save_plots:
+                        plot_name = f"fuel_vs_distance_{aircraft}_{mod}_flap{flap}_mach{mach:.2f}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.png"
+                        case["plot_path"] = aircraft_dirs[aircraft]["plots"] / plot_name
+                    if save_timeseries:
+                        ts_name = f"timeseries_{aircraft}_{mod}_flap{flap}_mach{mach:.2f}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.parquet"
+                        case["timeseries_path"] = aircraft_dirs[aircraft]["timeseries"] / ts_name
+                        case["save_timeseries"] = True
+                    cases.append(case)
 
     # Execute in parallel
     from functools import partial
     worker_func = partial(run_single_case, hide_mach_limited=hide_mach_limited, hide_altitude_limited=hide_altitude_limited)
     results = []
-    with ProcessPoolExecutor(max_workers=parallel_workers) as ex:
+    Executor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
+    with Executor(max_workers=parallel_workers) as ex:
         fut_to_case = {ex.submit(worker_func, c): c for c in cases}
         for fut in as_completed(fut_to_case):
-            results.append(fut.result())
+            case = fut_to_case[fut]
+            try:
+                results.append(fut.result())
+            except Exception as e:
+                results.append({**case, "status": "error", "error_message": str(e),
+                                "total_dist_nm": np.nan, "total_time_min": np.nan, "fuel_burned_lb": np.nan,
+                                "first_level_off_ft": np.nan, "cruise_vktas_kts": np.nan})
 
     df = pd.DataFrame(results)
     df["reserve_fuel_calc_lb"] = pd.to_numeric(df.get("initial_fuel_lb"), errors="coerce") - pd.to_numeric(df.get("fuel_burned_lb"), errors="coerce")
@@ -633,6 +704,7 @@ def parse_args():
     p.add_argument("--flaps", nargs="+", type=int, default=[0])
     p.add_argument("--parallel", type=int, default=6)
     p.add_argument("--mach", nargs="*", type=float, default=None, help="Optional custom Mach values (e.g., --mach 0.70 0.69 0.68)")
+    p.add_argument("--kias", nargs="*", type=float, default=None, help="Optional IAS values for turboprops in kts (e.g., --kias 170 160 150)")
     p.add_argument("--alts", nargs="*", type=int, default=None, help="Optional custom altitudes in ft (e.g., --alts 41000 39000 35000)")
     p.add_argument("--no-plots", action="store_true", help="Disable per-run PNG plot export (fuel vs distance)")
     p.add_argument("--no-summary-plots", action="store_true", help="Disable summary PNG plots (payload-range and family plots)")
@@ -653,6 +725,7 @@ def main():
         save_plots=not args.no_plots,
         output_dir=args.out,
         mach_values=args.mach,
+        kias_values=args.kias,
         alt_values=args.alts,
         save_summary_plots=not args.no_summary_plots,
     )

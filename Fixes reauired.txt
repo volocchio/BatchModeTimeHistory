@@ -1,5 +1,43 @@
 ROC for 208 seems low
-6 to 7 fuel flow increase
+
 KSAN broken
-file output folders per run, not stramlit launch
-sfc issues
+
+export nice pdf for single run
+
+write output option needs to be on left UI panel
+
+the airport information needs to be cleaned up inthe UI output side
+
+error at top about not enought fuel, instead at end of data section
+
+	in single-run mode, the segment 5 for C208B should not be increasing mach number, segment 5 is a climb at a set mach, if over the knee.  this is suspicious as the config file should have the proper IAS and M for climb targets.
+
+need airspeed grid option in batch for turboprops
+
+do we need combined output files in batch
+
+VTAS is high in batch mode only
+
+	in batch mode, we need indicated airspeed in the summary utput csvs.
+
+---looks like the altitude restriction for single run is not enforced.  CJ at 43000?
+
+---when i run a single-run plane at the same altitude, the indicated and true values in the output summary csv are higher for batch.
+
+---the sig digs int he summary csvs need to be 0 for distance, and vkias
+
+
+
+	the Vpseeda on landing should be calculated at the beginning of segment 11 
+	in the UI output, i want the second plot to be an altitude and speeds vs distance plot, IAS TAS, just like the Altitude and Mach vs. Distance
+
+
+	6 to 7 fuel flow increase
+	file output folders per run, not stramlit launch
+	sfc issues
+	ISA in output headers
+	2 second output for files
+	Enable v1 cuts is redundant in the UI oputput page
+	fuel flows are still jumpy for turboprops
+	Git
+	landing secttion end weight is none

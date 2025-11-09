@@ -604,3 +604,60 @@ def build_alt_tas_ias_profile_figure(tamarack_data, flatwing_data):
         title='Altitude, TAS and IAS vs. Distance'
     )
     return fig
+
+def build_roc_figure(tamarack_data, flatwing_data):
+    fig = go.Figure()
+    if not tamarack_data.empty and 'ROC (fpm)' in tamarack_data.columns:
+        fig.add_trace(go.Scatter(
+            x=tamarack_data['Distance (NM)'], y=tamarack_data['ROC (fpm)'],
+            mode='lines', name='Tamarack', line=dict(color='blue')
+        ))
+    if not flatwing_data.empty and 'ROC (fpm)' in flatwing_data.columns:
+        fig.add_trace(go.Scatter(
+            x=flatwing_data['Distance (NM)'], y=flatwing_data['ROC (fpm)'],
+            mode='lines', name='Flatwing', line=dict(color='purple')
+        ))
+    fig.update_layout(
+        title='Rate of Climb vs Distance',
+        xaxis_title='Distance (NM)',
+        yaxis_title='ROC (fpm)'
+    )
+    return fig
+
+def build_thrust_figure(tamarack_data, flatwing_data):
+    fig = go.Figure()
+    if not tamarack_data.empty and 'Thrust (lb)' in tamarack_data.columns:
+        fig.add_trace(go.Scatter(
+            x=tamarack_data['Distance (NM)'], y=tamarack_data['Thrust (lb)'],
+            mode='lines', name='Tamarack', line=dict(color='blue')
+        ))
+    if not flatwing_data.empty and 'Thrust (lb)' in flatwing_data.columns:
+        fig.add_trace(go.Scatter(
+            x=flatwing_data['Distance (NM)'], y=flatwing_data['Thrust (lb)'],
+            mode='lines', name='Flatwing', line=dict(color='purple')
+        ))
+    fig.update_layout(
+        title='Thrust vs Distance',
+        xaxis_title='Distance (NM)',
+        yaxis_title='Thrust (lb)'
+    )
+    return fig
+
+def build_drag_figure(tamarack_data, flatwing_data):
+    fig = go.Figure()
+    if not tamarack_data.empty and 'Drag (lb)' in tamarack_data.columns:
+        fig.add_trace(go.Scatter(
+            x=tamarack_data['Distance (NM)'], y=tamarack_data['Drag (lb)'],
+            mode='lines', name='Tamarack', line=dict(color='blue')
+        ))
+    if not flatwing_data.empty and 'Drag (lb)' in flatwing_data.columns:
+        fig.add_trace(go.Scatter(
+            x=flatwing_data['Distance (NM)'], y=flatwing_data['Drag (lb)'],
+            mode='lines', name='Flatwing', line=dict(color='purple')
+        ))
+    fig.update_layout(
+        title='Drag vs Distance',
+        xaxis_title='Distance (NM)',
+        yaxis_title='Drag (lb)'
+    )
+    return fig

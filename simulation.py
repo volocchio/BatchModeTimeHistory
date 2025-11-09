@@ -394,6 +394,7 @@ def run_simulation(
     v1_cut_enabled: bool,
     write_output_file: bool = True,
     cruise_mach: float | None = None,
+    cruise_kias: float | None = None,
     isa_dev_c: float | None = None,
     range_mode: bool = False,
 ):
@@ -414,6 +415,7 @@ def run_simulation(
         v1_cut_enabled: Whether V1 cut is enabled.
         write_output_file: Whether to write the output file.
         cruise_mach: Optional cruise Mach number.
+        cruise_kias: Optional cruise indicated airspeed in knots (used for turboprops).
         isa_dev_c: Optional ISA deviation in degrees Celsius.
         range_mode: Optional range mode flag.
 
@@ -493,7 +495,9 @@ def run_simulation(
     reserve_fuel = reserve_fuel
     descent_fuel_per_kft_lb = 3.5
     m_cruise = float(cruise_mach) if cruise_mach is not None else 0.7
-    alt_goal = cruise_alt
+    v_cruise_ias = float(cruise_kias) if cruise_kias is not None else None
+    ceiling_ft = int(ac[8]) if len(ac) > 8 else int(cruise_alt)
+    alt_goal = min(int(cruise_alt), ceiling_ft)
     rod = -2000
     rod_u_10k = -1500
     rod_approach = -700
@@ -872,7 +876,9 @@ def run_simulation(
             speed_goal = m_climb
             roc_goal = roc_min
         elif segment in (6, 7):
-            speed_goal = v_u_10k if alt <= 10100 else m_cruise
+            # Use IAS target for turboprops when provided; otherwise Mach
+            use_ias = (aircraft in TURBOPROP_PARAMS) and (v_cruise_ias is not None)
+            speed_goal = v_u_10k if alt <= 10100 else (v_cruise_ias if use_ias else m_cruise)
             roc_goal = 0
         elif segment == 8:
             if alt <= 10100:
@@ -979,6 +985,23 @@ def run_simulation(
         roc_fpm = roc_fps * 60
         gradient = tan(gamma) * 100 if gamma != 0 else 0
 
+        # Prevent overshoot of target cruise altitude during climb segments (4/5)
+        if segment in (4, 5):
+            next_alt = alt + roc_fps * t_inc
+            if next_alt > alt_goal:
+                roc_fps = max(0.0, (alt_goal - alt) / t_inc)
+                roc_fpm = roc_fps * 60
+                tx = np.clip(roc_fps / max(v_true_fps, 1e-6), -1.0, 1.0)
+                gamma = np.arcsin(tx)
+                gradient = tan(gamma) * 100 if gamma != 0 else 0
+
+        # Enforce level flight during cruise segments (6/7): no climb/descent
+        if segment in (6, 7):
+            gamma = 0.0
+            roc_fps = 0.0
+            roc_fpm = 0.0
+            gradient = 0.0
+
         if alt - alt_to >= 400 and segment == 2:
             segment = 3
             dist_to_400ft = dist_ft  # Distance from start to 400 ft
@@ -1062,6 +1085,9 @@ def run_simulation(
                 segment = 7
 
         if segment == 6 and last_segment != 6:
+            # Clamp altitude immediately upon entering cruise to avoid any overshoot from previous step
+            if alt > alt_goal:
+                alt = alt_goal
             leveloff += 1
             climb_fuel = fuel_burned
             climb_time = t
@@ -1080,6 +1106,9 @@ def run_simulation(
         dist_ft += (v_true_fps + v_true_fps_wind) * t_inc
         remaining_dist = total_dist - dist_ft / 6076.12
         alt += roc_fps * t_inc
+        # Do not exceed selected cruise altitude in cruise segments
+        if segment in (6, 7) and alt > alt_goal:
+            alt = alt_goal
         t += t_inc
         # Fuel burn: use turboprop SSFC (lb/shp-hr) if turboprop model active; otherwise jet SFC (lb/lbf-hr)
         if turboprop_params is not None and 'SSFC_lb_per_shp_hr' in turboprop_params:
@@ -1232,7 +1261,8 @@ def run_simulation(
             segment = 5
         if (abs(round(thrust - drag)) < 1 or m >= m_cruise or m >= mmo) and segment == 6:
             segment = 7
-        if (segment in (6, 7) and alt > 10000) and ((not range_mode and remaining_dist <= descent_threshold) or (range_mode and fob <= reserve_fuel + max(0.0, (alt - alt_land) / 1000.0) * descent_fuel_per_kft_lb)):
+        # Start descent when reaching distance threshold (normal mode) or reserve threshold (range_mode), regardless of altitude
+        if (segment in (6, 7)) and ((not range_mode and remaining_dist <= descent_threshold) or (range_mode and fob <= reserve_fuel + max(0.0, (alt - alt_land) / 1000.0) * descent_fuel_per_kft_lb)):
             segment = 8
             gamma = -0.01
             fuel_start_descent = fob

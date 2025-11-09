@@ -4,7 +4,7 @@ import pandas as pd
 from aircraft_config import AIRCRAFT_CONFIG
 from utils import load_airports
 from simulation import run_simulation, haversine_with_bearing, reset_output_timestamp, get_global_timestamp
-from display import display_simulation_results, build_route_map_figure, build_fuel_remaining_figure, build_alt_mach_profile_figure, build_alt_tas_ias_profile_figure
+from display import display_simulation_results, build_route_map_figure, build_fuel_remaining_figure, build_alt_mach_profile_figure, build_alt_tas_ias_profile_figure, build_roc_figure, build_thrust_figure, build_drag_figure
 
 # Optional PDF dependencies
 try:
@@ -14,6 +14,11 @@ try:
     from reportlab.lib.units import inch  # type: ignore
 except Exception:
     canvas = None  # Fallback if reportlab is not installed
+# Optional Pillow for robust image handling
+try:
+    from PIL import Image  # type: ignore
+except Exception:
+    Image = None  # Fallback if pillow is not installed
 
 # --- Streamlit UI ---
 st.title("Flight Simulation App")
@@ -828,7 +833,7 @@ if ran_now:
         st.markdown("---")
         st.subheader("Summary PDF Export")
         st.caption("Exports route map, altitude/Mach profile, and fuel remaining plots with key metadata into a single PDF.")
-        generate_pdf = st.button("Generate PDF Summary", type="secondary")
+        generate_pdf = st.button("Generate PDF Summary", type="secondary", key="pdf_generate_btn_after_run")
         should_generate_pdf = generate_pdf or (pdf_mode == "Auto-generate")
         if should_generate_pdf:
             # Determine output directory (use existing output files dir if present)
@@ -844,6 +849,9 @@ if ran_now:
                 fuel_fig = build_fuel_remaining_figure(tamarack_data, flatwing_data, tamarack_results, flatwing_results)
                 alt_fig = build_alt_mach_profile_figure(tamarack_data, flatwing_data)
                 tas_ias_fig = build_alt_tas_ias_profile_figure(tamarack_data, flatwing_data)
+                roc_fig = build_roc_figure(tamarack_data, flatwing_data)
+                thrust_fig = build_thrust_figure(tamarack_data, flatwing_data)
+                drag_fig = build_drag_figure(tamarack_data, flatwing_data)
             except Exception as e:
                 st.error(f"Failed to build figures: {e}")
                 route_fig = fuel_fig = alt_fig = tas_ias_fig = None
@@ -851,21 +859,40 @@ if ran_now:
             img_paths = []
             try:
                 if route_fig is not None:
+                    route_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                     route_path = os.path.join(output_dir, "route_map.png")
                     route_fig.write_image(route_path, width=1600, height=900, scale=2)
                     img_paths.append(("Route Map", route_path))
                 if fuel_fig is not None:
+                    fuel_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                     fuel_path = os.path.join(output_dir, "fuel_remaining.png")
                     fuel_fig.write_image(fuel_path, width=1600, height=900, scale=2)
                     img_paths.append(("Fuel Remaining vs Distance", fuel_path))
                 if alt_fig is not None:
+                    alt_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                     alt_path = os.path.join(output_dir, "altitude_mach.png")
                     alt_fig.write_image(alt_path, width=1600, height=900, scale=2)
                     img_paths.append(("Altitude and Mach vs Distance", alt_path))
                 if tas_ias_fig is not None:
+                    tas_ias_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                     tas_ias_path = os.path.join(output_dir, "altitude_tas_ias.png")
                     tas_ias_fig.write_image(tas_ias_path, width=1600, height=900, scale=2)
                     img_paths.append(("Altitude, TAS and IAS vs Distance", tas_ias_path))
+                if roc_fig is not None:
+                    roc_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
+                    roc_path = os.path.join(output_dir, "roc_vs_distance.png")
+                    roc_fig.write_image(roc_path, width=1600, height=900, scale=2)
+                    img_paths.append(("Rate of Climb vs Distance", roc_path))
+                if thrust_fig is not None:
+                    thrust_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
+                    thrust_path = os.path.join(output_dir, "thrust_vs_distance.png")
+                    thrust_fig.write_image(thrust_path, width=1600, height=900, scale=2)
+                    img_paths.append(("Thrust vs Distance", thrust_path))
+                if drag_fig is not None:
+                    drag_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
+                    drag_path = os.path.join(output_dir, "drag_vs_distance.png")
+                    drag_fig.write_image(drag_path, width=1600, height=900, scale=2)
+                    img_paths.append(("Drag vs Distance", drag_path))
             except Exception as e:
                 missing.append("kaleido")
                 st.error(f"Image export failed. Ensure 'kaleido' is installed. Error: {e}")
@@ -934,17 +961,90 @@ if ran_now:
                         y = add_line(y, "First Level-Off Alt (ft)", "Cruise - First Level-Off Alt (ft)", fmt="{v:,.0f}")
                         y -= 6
                         return y
-                    def update_ysum(y, title, res):
-                        return write_results_block(y, title, res)
+                    def write_segmented_metrics(y, title, res):
+                        c.setFont("Helvetica-Bold", 13)
+                        c.drawString(margin, y, f"Detailed Metrics - {title}")
+                        y -= 18
+                        segs = [
+                            ("Takeoff", [
+                                ("Takeoff Start Weight (lb)", None), ("Takeoff End Weight (lb)", None),
+                                ("VR", ("Takeoff V-Speeds", "VR")), ("V1", ("Takeoff V-Speeds", "V1")), ("V2", ("Takeoff V-Speeds", "V2")), ("V3", ("Takeoff V-Speeds", "V3")),
+                                ("Takeoff Roll Dist (ft)", None), ("Dist to 35 ft (ft)", None), ("Segment 1 Gradient (%)", None), ("Dist to 400 ft (ft)", None), ("Segment 2 Gradient (%)", None), ("Dist to 1500 ft (ft)", None), ("Segment 3 Gradient (%)", None),
+                                ("Climb Fuel (lb)", None), ("Fuel Remaining After Takeoff (lb)", None)
+                            ]),
+                            ("Climb", [
+                                ("Climb Start Weight (lb)", None), ("Climb End Weight (lb)", None), ("Climb Time (min)", None), ("Climb Dist (NM)", None), ("Climb Fuel (lb)", None), ("Fuel Remaining After Climb (lb)", None)
+                            ]),
+                            ("Cruise", [
+                                ("Cruise Start Weight (lb)", None), ("Cruise End Weight (lb)", None), ("Cruise Time (min)", None), ("Cruise Dist (NM)", None), ("Cruise Fuel (lb)", None), ("Cruise VKTAS (knots)", None), ("Cruise - First Level-Off Alt (ft)", None), ("Fuel Remaining After Cruise (lb)", None)
+                            ]),
+                            ("Descent", [
+                                ("Descent Start Weight (lb)", None), ("Descent End Weight (lb)", None), ("Descent Time (min)", None), ("Descent Dist (NM)", None), ("Descent Fuel (lb)", None), ("Fuel Remaining After Descent (lb)", None)
+                            ]),
+                            ("Landing", [
+                                ("Landing Start Weight (lb)", None), ("Landing End Weight (lb)", None),
+                                ("VAPP", ("Approach V-Speeds", "VAPP")), ("VREF", ("Approach V-Speeds", "VREF")),
+                                ("Landing - Dist from 35 ft to Stop (ft)", None), ("Landing - Ground Roll (ft)", None), ("Fuel Remaining After Landing (lb)", None)
+                            ]),
+                            ("Total", [
+                                ("Total Time (min)", None), ("Total Dist (NM)", None), ("Total Fuel Burned (lb)", None), ("Fuel Remaining (lb)", None), ("V1 Cut", None)
+                            ])
+                        ]
+                        c.setFont("Helvetica", 11)
+                        for sec, items in segs:
+                            c.setFont("Helvetica-Bold", 12)
+                            c.drawString(margin, y, sec)
+                            y -= 14
+                            c.setFont("Helvetica", 11)
+                            for label_txt, keyinfo in items:
+                                val = None
+                                if keyinfo is None:
+                                    val = res.get(label_txt)
+                                else:
+                                    vs_key, sub = keyinfo
+                                    vs = res.get(vs_key)
+                                    if isinstance(vs, dict):
+                                        val = vs.get(sub) or vs.get(sub.lower()) or vs.get(sub.title())
+                                if val is not None:
+                                    c.drawString(margin + 12, y, f"{label_txt}: {val}")
+                                    y -= 12
+                                    if y < margin + 80:
+                                        c.showPage(); y = height - margin
+                        return y
                     if wing_type in ["Tamarack", "Comparison"]:
-                        ysum = update_ysum(ysum, "Tamarack", tamarack_results)
+                        ysum = write_results_block(ysum, "Tamarack - Summary", tamarack_results)
                     if wing_type in ["Flatwing", "Comparison"]:
-                        ysum = update_ysum(ysum, "Flatwing", flatwing_results)
+                        ysum = write_results_block(ysum, "Flatwing - Summary", flatwing_results)
+                    c.showPage()
+                    ymet = height - margin
+                    if wing_type in ["Tamarack", "Comparison"]:
+                        ymet = write_segmented_metrics(ymet, "Tamarack", tamarack_results)
+                        if ymet < margin + 100:
+                            c.showPage(); ymet = height - margin
+                    if wing_type in ["Flatwing", "Comparison"]:
+                        ymet = write_segmented_metrics(ymet, "Flatwing", flatwing_results)
                     c.showPage()
                     # Add each image, one per page, scaled to fit
                     for title, pth in img_paths:
                         try:
-                            img = ImageReader(pth)  # type: ignore
+                            safe_path = pth
+                            if Image is not None:
+                                try:
+                                    im = Image.open(pth)
+                                    if "A" in im.getbands() or im.mode in ("RGBA", "LA"):
+                                        bg = Image.new("RGB", im.size, (255, 255, 255))
+                                        if im.mode in ("RGBA", "LA"):
+                                            im = im.convert("RGBA")
+                                        bg.paste(im, mask=im.split()[-1] if "A" in im.getbands() else None)
+                                        safe_path = pth.rsplit(".", 1)[0] + "_pdf.jpg"
+                                        bg.save(safe_path, "JPEG", quality=95)
+                                    else:
+                                        if im.mode != "RGB":
+                                            safe_path = pth.rsplit(".", 1)[0] + "_pdf.jpg"
+                                            im.convert("RGB").save(safe_path, "JPEG", quality=95)
+                                except Exception:
+                                    pass
+                            img = ImageReader(safe_path)  # type: ignore
                             iw, ih = img.getSize()
                             max_w = width - 2 * margin
                             max_h = height - 2 * margin - 20
@@ -957,7 +1057,11 @@ if ran_now:
                             c.drawString(margin, height - margin - 12, title)
                             c.drawImage(img, x, yimg - 10, width=draw_w, height=draw_h, preserveAspectRatio=True)  # type: ignore
                             c.showPage()
-                        except Exception:
+                        except Exception as e:
+                            try:
+                                st.warning(f"Skipped '{title}' in PDF: {e}")
+                            except Exception:
+                                pass
                             continue
                     c.save()
                     st.success(f"Summary PDF created: `{pdf_path}`")
@@ -995,7 +1099,7 @@ else:
         st.markdown("---")
         st.subheader("Summary PDF Export")
         st.caption("Exports route map, altitude/Mach profile, and fuel remaining plots with key metadata into a single PDF.")
-        generate_pdf = st.button("Generate PDF Summary", type="secondary")
+        generate_pdf = st.button("Generate PDF Summary", type="secondary", key="pdf_generate_btn_fallback")
         should_generate_pdf = generate_pdf or (pdf_mode == "Auto-generate")
         if should_generate_pdf:
             try:
@@ -1020,15 +1124,19 @@ else:
                 img_paths = []
                 try:
                     if route_fig is not None:
+                        route_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                         route_path = os.path.join(output_dir, "route_map.png"); route_fig.write_image(route_path, width=1600, height=900, scale=2)
                         img_paths.append(("Route Map", route_path))
                     if fuel_fig is not None:
+                        fuel_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                         fuel_path = os.path.join(output_dir, "fuel_remaining.png"); fuel_fig.write_image(fuel_path, width=1600, height=900, scale=2)
                         img_paths.append(("Fuel Remaining vs Distance", fuel_path))
                     if alt_fig is not None:
+                        alt_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                         alt_path = os.path.join(output_dir, "altitude_mach.png"); alt_fig.write_image(alt_path, width=1600, height=900, scale=2)
                         img_paths.append(("Altitude and Mach vs Distance", alt_path))
                     if tas_ias_fig is not None:
+                        tas_ias_fig.update_layout(paper_bgcolor="white", plot_bgcolor="white")
                         tas_ias_path = os.path.join(output_dir, "altitude_tas_ias.png"); tas_ias_fig.write_image(tas_ias_path, width=1600, height=900, scale=2)
                         img_paths.append(("Altitude, TAS and IAS vs Distance", tas_ias_path))
                 except Exception as e:
@@ -1090,7 +1198,24 @@ else:
                     # Figures pages
                     for title, pth in img_paths:
                         try:
-                            img = ImageReader(pth)  # type: ignore
+                            safe_path = pth
+                            if Image is not None:
+                                try:
+                                    im = Image.open(pth)
+                                    if "A" in im.getbands() or im.mode in ("RGBA", "LA"):
+                                        bg = Image.new("RGB", im.size, (255, 255, 255))
+                                        if im.mode in ("RGBA", "LA"):
+                                            im = im.convert("RGBA")
+                                        bg.paste(im, mask=im.split()[-1] if "A" in im.getbands() else None)
+                                        safe_path = pth.rsplit(".", 1)[0] + "_pdf.jpg"
+                                        bg.save(safe_path, "JPEG", quality=95)
+                                    else:
+                                        if im.mode != "RGB":
+                                            safe_path = pth.rsplit(".", 1)[0] + "_pdf.jpg"
+                                            im.convert("RGB").save(safe_path, "JPEG", quality=95)
+                                except Exception:
+                                    pass
+                            img = ImageReader(safe_path)  # type: ignore
                             iw, ih = img.getSize()
                             max_w = width - 2 * margin
                             max_h = height - 2 * margin - 20
@@ -1103,11 +1228,14 @@ else:
                             c.drawString(margin, height - margin - 12, title)
                             c.drawImage(img, x, yimg - 10, width=draw_w, height=draw_h, preserveAspectRatio=True)  # type: ignore
                             c.showPage()
-                        except Exception:
+                        except Exception as e:
+                            try:
+                                st.warning(f"Skipped '{title}' in PDF: {e}")
+                            except Exception:
+                                pass
                             continue
                     c.save()
                     st.success(f"Summary PDF created: `{pdf_path}`")
-                    # Offer download
                     try:
                         with open(pdf_path, "rb") as f:
                             st.download_button("Download Summary PDF", data=f.read(), file_name=os.path.basename(pdf_path), mime="application/pdf")
@@ -1115,125 +1243,3 @@ else:
                         pass
             except Exception as e:
                 st.error(f"PDF export failed: {e}")
-    st.subheader("Summary PDF Export")
-    st.caption("Exports route map, altitude/Mach profile, and fuel remaining plots with key metadata into a single PDF.")
-    generate_pdf = st.button("Generate PDF Summary", type="secondary")
-    if generate_pdf:
-        try:
-            # Prefer prior run data from session (handles rerun when clicking this button)
-            sim = st.session_state.get('sim')
-            if sim is None:
-                st.error("No simulation results available to export. Run a simulation first.")
-                st.stop()
-            # Unpack state
-            dep_lat = sim['dep_lat']; dep_lon = sim['dep_lon']
-            arr_lat = sim['arr_lat']; arr_lon = sim['arr_lon']
-            distance_nm = sim['distance_nm']; bearing_deg = sim['bearing_deg']
-            dep_airport_code = sim['dep_airport_code']; arr_airport_code = sim['arr_airport_code']
-            winds_temps_source = sim['winds']; isa_dev = sim['isa_dev']
-            aircraft_model = sim['aircraft_model']; wing_type = sim['wing_type']
-            tamarack_data = sim['tam_data']; tamarack_results = sim['tam_results']
-            flatwing_data = sim['flat_data']; flatwing_results = sim['flat_results']
-            # Output directory: use shared timestamped folder
-            output_dir = sim.get('output_dir') or os.path.join("single_output", get_global_timestamp())
-            os.makedirs(output_dir, exist_ok=True)
-            # Check dependencies
-            missing = []
-            if canvas is None:
-                missing.append("reportlab")
-            # Build figures (these will need kaleido for static export)
-            route_fig = build_route_map_figure(dep_lat, dep_lon, arr_lat, arr_lon, distance_nm, dep_airport_code, arr_airport_code)
-            fuel_fig = build_fuel_remaining_figure(tamarack_data, flatwing_data, tamarack_results, flatwing_results)
-            alt_fig = build_alt_mach_profile_figure(tamarack_data, flatwing_data)
-            tas_ias_fig = build_alt_tas_ias_profile_figure(tamarack_data, flatwing_data)
-            # Attempt to write images (requires kaleido)
-            img_paths = []
-            try:
-                route_path = os.path.join(output_dir, "route_map.png"); route_fig.write_image(route_path, width=1600, height=900, scale=2)
-                img_paths.append(("Route Map", route_path))
-                fuel_path = os.path.join(output_dir, "fuel_remaining.png"); fuel_fig.write_image(fuel_path, width=1600, height=900, scale=2)
-                img_paths.append(("Fuel Remaining vs Distance", fuel_path))
-                alt_path = os.path.join(output_dir, "altitude_mach.png"); alt_fig.write_image(alt_path, width=1600, height=900, scale=2)
-                img_paths.append(("Altitude and Mach vs Distance", alt_path))
-                tas_ias_path = os.path.join(output_dir, "altitude_tas_ias.png"); tas_ias_fig.write_image(tas_ias_path, width=1600, height=900, scale=2)
-                img_paths.append(("Altitude, TAS and IAS vs Distance", tas_ias_path))
-            except Exception as e:
-                missing.append("kaleido")
-                st.error(f"Image export failed. Ensure 'kaleido' is installed. Error: {e}")
-            if missing:
-                st.warning("Install required packages: " + ", ".join(sorted(set(missing))) + " (e.g., pip install reportlab kaleido)")
-            else:
-                # Compose PDF
-                pdf_name = f"summary_{aircraft_model}_{wing_type}_{dep_airport_code}_to_{arr_airport_code}.pdf"
-                pdf_path = os.path.join(output_dir, pdf_name)
-                c = canvas.Canvas(pdf_path, pagesize=letter)  # type: ignore
-                width, height = letter
-                margin = 40; y = height - margin
-                c.setFont("Helvetica-Bold", 16); c.drawString(margin, y, "Flight Simulation Summary"); y -= 24
-                c.setFont("Helvetica", 11)
-                c.drawString(margin, y, f"Aircraft: {aircraft_model} | Config: {wing_type}"); y -= 16
-                c.drawString(margin, y, f"Route: {dep_airport_code} -> {arr_airport_code} | Distance: {distance_nm:.1f} NM | Bearing: {bearing_deg:.1f} deg"); y -= 16
-                try:
-                    c.drawString(margin, y, f"ISA Dev: {int(isa_dev):+d} deg C | Winds/Temps: {winds_temps_source}"); y -= 16
-                except Exception:
-                    pass
-                c.showPage()
-                # Results summary page
-                c.setFont("Helvetica-Bold", 14)
-                c.drawString(margin, height - margin, "Results Summary")
-                ysum = height - margin - 24
-                def write_results_block(y, title, res):
-                    if not res:
-                        return y
-                    c.setFont("Helvetica-Bold", 12)
-                    c.drawString(margin, y, title)
-                    y -= 16
-                    c.setFont("Helvetica", 11)
-                    def add_line(ypos, lbl, key, fmt="{v}"):
-                        v = res.get(key)
-                        if v is None:
-                            return ypos
-                        try:
-                            sval = fmt.format(v=v)
-                        except Exception:
-                            sval = str(v)
-                        c.drawString(margin + 12, ypos, f"{lbl}: {sval}")
-                        return ypos - 14
-                    y = add_line(y, "Total Distance (NM)", "Total Dist (NM)", fmt="{v:.1f}")
-                    y = add_line(y, "Total Time (min)", "Total Time (min)", fmt="{v:.1f}")
-                    y = add_line(y, "Total Fuel Burned (lb)", "Total Fuel Burned (lb)", fmt="{v:,.0f}")
-                    y = add_line(y, "Fuel Remaining (lb)", "Fuel Remaining (lb)", fmt="{v:,.0f}")
-                    y = add_line(y, "Cruise TAS (kts)", "Cruise VKTAS (knots)", fmt="{v:.0f}")
-                    y = add_line(y, "First Level-Off Alt (ft)", "Cruise - First Level-Off Alt (ft)", fmt="{v:,.0f}")
-                    y -= 6
-                    return y
-                def update_ysum(y, title, res):
-                    return write_results_block(y, title, res)
-                if wing_type in ["Tamarack", "Comparison"]:
-                    ysum = update_ysum(ysum, "Tamarack", tamarack_results)
-                    ysum = write_results_block(ysum, "Tamarack", tamarack_results)
-                if wing_type in ["Flatwing", "Comparison"]:
-                    ysum = write_results_block(ysum, "Flatwing", flatwing_results)
-                    write_results_block("Flatwing", flatwing_results)
-                c.showPage()
-                # Figures pages
-                for title, pth in img_paths:
-                    try:
-                        img = ImageReader(pth)  # type: ignore
-                        iw, ih = img.getSize(); max_w = width - 2*margin; max_h = height - 2*margin - 20
-                        scale = min(max_w/iw, max_h/ih); draw_w = iw*scale; draw_h = ih*scale
-                        x = (width - draw_w)/2; yimg = (height - draw_h)/2
-                        c.setFont("Helvetica-Bold", 12); c.drawString(margin, height - margin - 12, title)
-                        c.drawImage(img, x, yimg - 10, width=draw_w, height=draw_h, preserveAspectRatio=True)  # type: ignore
-                        c.showPage()
-                    except Exception:
-                        continue
-                c.save()
-                st.success(f"Summary PDF created: `{pdf_path}`")
-                try:
-                    with open(pdf_path, "rb") as f:
-                        st.download_button("Download Summary PDF", data=f.read(), file_name=os.path.basename(pdf_path), mime="application/pdf")
-                except Exception:
-                    pass
-        except Exception as e:
-            st.error(f"PDF export failed: {e}")
