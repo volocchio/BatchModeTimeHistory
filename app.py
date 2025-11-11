@@ -82,21 +82,23 @@ with st.sidebar:
     # Display both aircraft images
     if aircraft_model:
         def show_img(prefix, caption):
-            base = f"images/{prefix}_{aircraft_model}"
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            images_dir = os.path.join(base_dir, "images")
+            base = os.path.join(images_dir, f"{prefix}_{aircraft_model}")
             candidates = [base + ext for ext in [".jpg", ".png", ".jpeg", ".webp"]]
             p = next((c for c in candidates if os.path.isfile(c)), None)
             if not p:
                 st.info(f"{caption} image not available")
-            else:
-                try:
-                    if Image is not None:
-                        with Image.open(p) as im:
-                            im.load()
-                            st.image(im, caption=caption, use_container_width=True)
-                    else:
-                        st.image(p, caption=caption, use_container_width=True)
-                except Exception:
-                    st.info(f"{caption} image not available")
+                return
+            try:
+                if Image is not None:
+                    with Image.open(p) as im:
+                        im.load()
+                        st.image(im, caption=caption, use_container_width=True)
+                else:
+                    st.image(p, caption=caption, use_container_width=True)
+            except Exception:
+                st.info(f"{caption} image not available")
         show_img("tamarack", f"Tamarack {aircraft_model}")
         show_img("flatwing", f"Flatwing {aircraft_model}")
 
