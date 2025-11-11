@@ -85,10 +85,18 @@ with st.sidebar:
             base = f"images/{prefix}_{aircraft_model}"
             candidates = [base + ext for ext in [".jpg", ".png", ".jpeg", ".webp"]]
             p = next((c for c in candidates if os.path.isfile(c)), None)
-            if p:
-                st.image(p, caption=caption, use_container_width=True)
-            else:
+            if not p:
                 st.info(f"{caption} image not available")
+            else:
+                try:
+                    if Image is not None:
+                        with Image.open(p) as im:
+                            im.load()
+                            st.image(im, caption=caption, use_container_width=True)
+                    else:
+                        st.image(p, caption=caption, use_container_width=True)
+                except Exception:
+                    st.info(f"{caption} image not available")
         show_img("tamarack", f"Tamarack {aircraft_model}")
         show_img("flatwing", f"Flatwing {aircraft_model}")
 
@@ -348,7 +356,7 @@ with st.sidebar:
         if comparison_mode:
             # In comparison mode, set Tamarack BOW based on Flatwing BOW
             bow_diff = 65 if aircraft_model == "M2" else 75
-            st.session_state.bow_tamarack = st.session_state.get('bow_flatwing', int(flatwing_bow)) + bow_diff
+            st.session_state.bow_tamarack = st.session_state.get('bow_input_flatwing', int(flatwing_bow)) + bow_diff
         else:
             # In single config mode, use the configured Tamarack BOW
             st.session_state.bow_tamarack = int(tamarack_bow)
@@ -356,7 +364,7 @@ with st.sidebar:
     # Update Tamarack BOW if Flatwing BOW changes in comparison mode
     if comparison_mode and st.session_state.get('bow_changed', False):
         bow_diff = 65 if aircraft_model == "M2" else 75
-        st.session_state.bow_tamarack = st.session_state.bow_flatwing + bow_diff
+        st.session_state.bow_tamarack = st.session_state.get('bow_input_flatwing', int(flatwing_bow)) + bow_diff
     
     # Create three columns for the inputs
     col4, col5, col6 = st.columns(3)
