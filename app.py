@@ -21,6 +21,9 @@ try:
 except Exception:
     Image = None  # Fallback if pillow is not installed
 
+import io
+import zipfile
+
 # --- Streamlit UI ---
 st.title("Flight Simulation App")
 st.markdown("""
@@ -858,6 +861,35 @@ if ran_now:
         output_dir = os.path.dirname(output_files[0][1]) if output_files else "single_output"
         st.info(f" All files saved in: `{output_dir}`")
         st.write("*Files contain simulation parameters sampled every 2 seconds*")
+        for config_name, filepath in output_files:
+            try:
+                with open(filepath, "rb") as f:
+                    st.download_button(
+                        f"Download CSV - {config_name}",
+                        f.read(),
+                        file_name=os.path.basename(filepath),
+                        mime="text/csv",
+                        key=f"dl_csv_{os.path.basename(filepath)}"
+                    )
+            except Exception:
+                pass
+        zip_folder_name = st.text_input("ZIP folder name", value=os.path.basename(output_dir), key="zip_folder_name")
+        try:
+            file_names = [n for n in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, n))]
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for n in file_names:
+                    full = os.path.join(output_dir, n)
+                    zf.write(full, os.path.join(zip_folder_name, n))
+            st.download_button(
+                "Download all outputs (ZIP)",
+                data=buf.getvalue(),
+                file_name=f"{zip_folder_name}.zip",
+                mime="application/zip",
+                key="zip_download_all"
+            )
+        except Exception:
+            pass
 
     # PDF export panel (respect sidebar)
     if pdf_mode != "Hide":
