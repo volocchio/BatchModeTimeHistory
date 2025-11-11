@@ -1,4 +1,5 @@
 import os
+import base64
 import streamlit as st
 import pandas as pd
 from aircraft_config import AIRCRAFT_CONFIG
@@ -98,7 +99,27 @@ with st.sidebar:
                 else:
                     st.image(p, caption=caption, use_container_width=True)
             except Exception:
-                st.info(f"{caption} image not available")
+                try:
+                    # Fallback if PIL decoding fails (e.g., no libjpeg on server)
+                    st.image(p, caption=caption, use_container_width=True)
+                except Exception:
+                    # Last-resort: embed as base64 data URI
+                    try:
+                        with open(p, "rb") as f:
+                            encoded = base64.b64encode(f.read()).decode("ascii")
+                        ext = os.path.splitext(p)[1].lower()
+                        mime = (
+                            "image/jpeg" if ext in (".jpg", ".jpeg") else
+                            "image/png" if ext == ".png" else
+                            "image/webp" if ext == ".webp" else
+                            "image/jpeg"
+                        )
+                        st.markdown(
+                            f'<img src="data:{mime};base64,{encoded}" alt="{caption}" style="max-width:100%;height:auto;" />',
+                            unsafe_allow_html=True,
+                        )
+                    except Exception:
+                        st.info(f"{caption} image not available")
         show_img("tamarack", f"Tamarack {aircraft_model}")
         show_img("flatwing", f"Flatwing {aircraft_model}")
 
