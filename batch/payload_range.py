@@ -533,8 +533,17 @@ def run_payload_range_batch(
                 aircraft_summary_dir = aircraft_dirs[aircraft]["summary_plots"]
                 
                 for alt in sorted(df_a["cruise_alt"].dropna().unique(), reverse=True):
-                    for mach in sorted(df_a["mach"].dropna().unique(), reverse=True):
-                        df_filtered = df_a[(df_a["cruise_alt"]==alt) & (np.isclose(df_a["mach"], mach))]
+                    # Decide whether this aircraft dataset uses IAS (turboprops) or Mach (jets)
+                    has_kias = ("kias" in df_a.columns) and pd.to_numeric(df_a.get("kias"), errors="coerce").notna().any()
+                    if has_kias:
+                        speeds = sorted(pd.to_numeric(df_a["kias"], errors="coerce").dropna().unique().tolist(), reverse=True)
+                    else:
+                        speeds = sorted(pd.to_numeric(df_a["mach"], errors="coerce").dropna().unique().tolist(), reverse=True)
+                    for spd in speeds:
+                        if has_kias:
+                            df_filtered = df_a[(df_a["cruise_alt"] == alt) & (pd.to_numeric(df_a["kias"], errors="coerce") == int(spd))]
+                        else:
+                            df_filtered = df_a[(df_a["cruise_alt"] == alt) & (np.isclose(pd.to_numeric(df_a["mach"], errors="coerce"), float(spd)))]
                         if df_filtered.empty:
                             continue
                         
@@ -587,15 +596,19 @@ def run_payload_range_batch(
                                     name=f"{mod_name} - {isa_label}",
                                     line=dict(color=color, dash=("dash" if isa_dev == -10 else "solid" if isa_dev == 0 else "dot" if isa_dev == 10 else "dashdot"))
                                 ))
+                        title_txt = (f"Payload-Range | {aircraft} | FL{int(alt/100)} | IAS {int(spd)} kt" if has_kias else f"Payload-Range | {aircraft} | FL{int(alt/100)} | M {float(spd):.2f}")
                         fig.update_layout(
-                            title=f"Payload-Range | {aircraft} | FL{int(alt/100)} | M {mach:.2f}",
+                            title=title_txt,
                             xaxis_title="Range (NM)",
                             yaxis_title="Payload (lb)",
                             template="plotly_white"
                         )
-                        fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_mach{mach:.2f}.png"
+                        if has_kias:
+                            fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_kias{int(spd)}.png"
+                        else:
+                            fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_mach{float(spd):.2f}.png"
                         fig.write_image(str(fname), width=1400, height=900, scale=2)
-            # Family: Range vs Mach by Altitude (payload 0) with ISA temperature separation
+            # Family: Range vs Speed by Altitude (payload 0) with ISA temperature separation
             for aircraft in sorted(df["aircraft"].dropna().unique()):
                 df_a0 = df[(df["aircraft"]==aircraft) & (df["payload"]==0)]
                 aircraft_summary_dir = aircraft_dirs[aircraft]["summary_plots"]
@@ -605,6 +618,12 @@ def run_payload_range_batch(
                     if df_alt.empty:
                         continue
                     
+                    # Decide IAS vs Mach
+                    has_kias = ("kias" in df_alt.columns) and pd.to_numeric(df_alt.get("kias"), errors="coerce").notna().any()
+                    x_col = "kias" if has_kias else "mach"
+                    x_label = "IAS (kts)" if has_kias else "Mach"
+                    title_txt = f"Range vs {'IAS' if has_kias else 'Mach'} (Payload=0) | {aircraft} | FL{int(alt/100)}"
+
                     # Create ISA deviation labels for better legend
                     df_alt = df_alt.copy()
                     df_alt.loc[:, "isa_label"] = df_alt["isa_dev"].apply(lambda x: f"ISA {x:+d}°C")
@@ -623,41 +642,52 @@ def run_payload_range_batch(
                             if df_isa.empty:
                                 continue
                             
-                            df_plot = df_isa.sort_values("mach")
+                            df_plot = df_isa.sort_values(x_col)
                             isa_label = f"ISA {isa_dev:+d}°C"
                             
                             fig.add_trace(go.Scatter(
-                                x=df_plot["mach"], 
-                                y=df_plot["total_dist_nm"], 
+                                x=pd.to_numeric(df_plot[x_col], errors="coerce"), 
+                                y=pd.to_numeric(df_plot["total_dist_nm"], errors="coerce"), 
                                 mode="lines", 
                                 name=f"{mod_name} FL{int(alt/100)} - {isa_label}",
                                 line=dict(color=color, dash=("dash" if isa_dev == -10 else "solid" if isa_dev == 0 else "dot" if isa_dev == 10 else "dashdot"))
                             ))
                     
                     fig.update_layout(
-                        title=f"Range vs Mach (Payload=0) | {aircraft} | FL{int(alt/100)}",
-                        xaxis_title="Mach",
+                        title=title_txt,
+                        xaxis_title=x_label,
                         yaxis_title="Range (NM)",
                         template="plotly_white"
                     )
-                    fig.write_image(str(aircraft_summary_dir / f"range_vs_mach_{aircraft}_FL{int(alt/100)}.png"), width=1600, height=900, scale=2)
-            # Family: Range vs Altitude by Mach (payload 0) with ISA temperature separation
+                    out_name = (f"range_vs_ias_{aircraft}_FL{int(alt/100)}.png" if has_kias else f"range_vs_mach_{aircraft}_FL{int(alt/100)}.png")
+                    fig.write_image(str(aircraft_summary_dir / out_name), width=1600, height=900, scale=2)
+            # Family: Range vs Altitude by Speed (payload 0) with ISA temperature separation
             for aircraft in sorted(df["aircraft"].dropna().unique()):
                 df_a0 = df[(df["aircraft"]==aircraft) & (df["payload"]==0)]
                 aircraft_summary_dir = aircraft_dirs[aircraft]["summary_plots"]
                 
-                for mach in sorted(df_a0["mach"].dropna().unique(), reverse=True):
-                    df_mach = df_a0[np.isclose(df_a0["mach"], mach)]
-                    if df_mach.empty:
+                # Decide speed dimension
+                has_kias = ("kias" in df_a0.columns) and pd.to_numeric(df_a0.get("kias"), errors="coerce").notna().any()
+                if has_kias:
+                    speeds = sorted(pd.to_numeric(df_a0["kias"], errors="coerce").dropna().unique().tolist(), reverse=True)
+                else:
+                    speeds = sorted(pd.to_numeric(df_a0["mach"], errors="coerce").dropna().unique().tolist(), reverse=True)
+                
+                for spd in speeds:
+                    if has_kias:
+                        df_spd = df_a0[pd.to_numeric(df_a0["kias"], errors="coerce") == int(spd)]
+                    else:
+                        df_spd = df_a0[np.isclose(pd.to_numeric(df_a0["mach"], errors="coerce"), float(spd))]
+                    if df_spd.empty:
                         continue
                     
                     # Create ISA deviation labels for better legend
-                    df_mach = df_mach.copy()
-                    df_mach.loc[:, "isa_label"] = df_mach["isa_dev"].apply(lambda x: f"ISA {x:+d}°C")
+                    df_spd = df_spd.copy()
+                    df_spd.loc[:, "isa_label"] = df_spd["isa_dev"].apply(lambda x: f"ISA {x:+d}°C")
                     
                     fig = go.Figure()
-                    for mod in sorted(df_mach["mod"].unique()):
-                        df_mod = df_mach[df_mach["mod"] == mod]
+                    for mod in sorted(df_spd["mod"].unique()):
+                        df_mod = df_spd[df_spd["mod"] == mod]
                         if df_mod.empty:
                             continue
                         
@@ -671,22 +701,25 @@ def run_payload_range_batch(
                             
                             df_plot = df_isa.sort_values("cruise_alt")
                             isa_label = f"ISA {isa_dev:+d}°C"
+                            speed_label = (f"IAS {int(spd)} kt" if has_kias else f"M {float(spd):.2f}")
                             
                             fig.add_trace(go.Scatter(
-                                x=df_plot["cruise_alt"], 
-                                y=df_plot["total_dist_nm"], 
+                                x=pd.to_numeric(df_plot["cruise_alt"], errors="coerce"), 
+                                y=pd.to_numeric(df_plot["total_dist_nm"], errors="coerce"), 
                                 mode="lines", 
-                                name=f"{mod_name} M {mach:.2f} - {isa_label}",
+                                name=f"{mod_name} {speed_label} - {isa_label}",
                                 line=dict(color=color, dash=("dash" if isa_dev == -10 else "solid" if isa_dev == 0 else "dot" if isa_dev == 10 else "dashdot"))
                             ))
                     
+                    title_txt = f"Range vs Altitude (Payload=0) | {aircraft} | {('IAS ' + str(int(spd)) + ' kt') if has_kias else ('M ' + format(float(spd), '.2f'))}"
                     fig.update_layout(
-                        title=f"Range vs Altitude (Payload=0) | {aircraft} | M {mach:.2f}",
+                        title=title_txt,
                         xaxis_title="Altitude (ft)",
                         yaxis_title="Range (NM)",
                         template="plotly_white"
                     )
-                    fig.write_image(str(aircraft_summary_dir / f"range_vs_altitude_{aircraft}_M{mach:.2f}.png"), width=1600, height=900, scale=2)
+                    out_name = (f"range_vs_altitude_{aircraft}_IAS{int(spd)}.png" if has_kias else f"range_vs_altitude_{aircraft}_M{float(spd):.2f}.png")
+                    fig.write_image(str(aircraft_summary_dir / out_name), width=1600, height=900, scale=2)
         except Exception:
             # Best-effort; ignore plotting errors to keep batch running
             pass
