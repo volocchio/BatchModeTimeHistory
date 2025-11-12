@@ -22,6 +22,8 @@ with st.sidebar:
     # Aircraft selection
     aircraft_types = sorted({a for a, _ in AIRCRAFT_CONFIG.keys()})
     selected_aircraft = st.multiselect("Aircraft Models", options=aircraft_types, default=["CJ1"])  # default CJ1
+    # Determine if current selection is all turboprops (used for defaults)
+    selected_is_turboprop = bool(selected_aircraft) and all(a in TURBOPROP_PARAMS for a in selected_aircraft)
 
     # Mods selection
     mods_all = ["Flatwing", "Tamarack"]
@@ -36,7 +38,7 @@ with st.sidebar:
 
     # Policy
     payload_steps = st.number_input("Number of Payload Steps (from max to zero)", min_value=1, max_value=20, step=1, value=6)
-    taxi_fuel = st.number_input("Taxi Fuel (lb)", min_value=0, max_value=1000, step=10, value=100)
+    taxi_fuel = st.number_input("Taxi Fuel (lb)", min_value=0, max_value=1000, step=10, value=(15 if selected_is_turboprop else 100))
 
     # Performance
     parallel = st.number_input("Parallel Workers", min_value=1, max_value=16, step=1, value=6)
@@ -62,9 +64,9 @@ with st.sidebar:
     # Sweep grids (range with steps)
     st.header("Sweep Grids")
     st.caption("Custom ranges will be filtered per-aircraft (Mach <= MMO, Alt <= ceiling, Alt >= 5000). Use negative steps for descending ranges.")
-    # Prefer IAS for turboprops
+    # Prefer TAS for turboprops
     selected_is_turboprop = bool(selected_aircraft) and all(a in TURBOPROP_PARAMS for a in selected_aircraft)
-    speed_type = st.radio("Speed type", options=["Mach", "IAS (kts)"], index=(1 if selected_is_turboprop else 0), horizontal=True)
+    speed_type = st.radio("Speed type", options=["Mach", "TAS (kts)"], index=(1 if selected_is_turboprop else 0), horizontal=True)
     if speed_type == "Mach":
         col_m1, col_m2, col_m3 = st.columns(3)
         with col_m1:
@@ -73,15 +75,15 @@ with st.sidebar:
             mach_end = st.number_input("Mach end", value=0.62, step=0.01, format="%.2f")
         with col_m3:
             mach_step = st.number_input("Mach step", value=-0.01, step=0.01, format="%.2f")
-        kias_start = kias_end = kias_step = None
+        tas_start = tas_end = tas_step = None
     else:
-        col_k1, col_k2, col_k3 = st.columns(3)
-        with col_k1:
-            kias_start = st.number_input("IAS start (kts)", value=170, step=5)
-        with col_k2:
-            kias_end = st.number_input("IAS end (kts)", value=150, step=5)
-        with col_k3:
-            kias_step = st.number_input("IAS step (kts)", value=-10, step=1)
+        col_t1, col_t2, col_t3 = st.columns(3)
+        with col_t1:
+            tas_start = st.number_input("TAS start (kts)", value=170, step=5)
+        with col_t2:
+            tas_end = st.number_input("TAS end (kts)", value=150, step=5)
+        with col_t3:
+            tas_step = st.number_input("TAS step (kts)", value=-10, step=1)
         mach_start = mach_end = mach_step = None
 
     col_a1, col_a2, col_a3 = st.columns(3)
@@ -142,7 +144,7 @@ with st.sidebar:
     if speed_type == "Mach":
         speed_count_est = _count_range_float(float(mach_start), float(mach_end), float(mach_step))
     else:
-        speed_count_est = _count_range_int(int(kias_start), int(kias_end), int(kias_step))
+        speed_count_est = _count_range_int(int(tas_start), int(tas_end), int(tas_step))
     alt_count_est = _count_range_int(int(alt_start), int(alt_end), int(alt_step))
     payload_count_est = int(payload_steps)
     est_total_runs = max(1, len(selected_aircraft) * len(selected_mods) * len(selected_isa) * 1 * speed_count_est * alt_count_est * payload_count_est)
@@ -199,12 +201,12 @@ if run_clicked:
                     x += step
             return list(dict.fromkeys(vals))
 
-        if mach_start is not None:
+        if speed_type == "Mach":
             mach_values = build_range(float(mach_start), float(mach_end), float(mach_step))
-            kias_values = None
+            tas_values = None
         else:
             mach_values = None
-            kias_values = build_int_range(int(kias_start), int(kias_end), int(kias_step))
+            tas_values = build_int_range(int(tas_start), int(tas_end), int(tas_step))
         alt_values = build_int_range(int(alt_start), int(alt_end), int(alt_step))
 
         t0 = time.perf_counter()
@@ -219,7 +221,8 @@ if run_clicked:
             save_plots=False,
             save_summary_plots=save_summary_plots_ui,
             mach_values=mach_values,
-            kias_values=kias_values,
+            kias_values=None,
+            tas_values=tas_values,
             alt_values=alt_values,
             hide_mach_limited=(output_mode == "Hide Mach-Limited Cases"),
             hide_altitude_limited=(altitude_mode == "Hide Altitude-Limited Cases"),
@@ -281,10 +284,10 @@ if summary_df is not None and len(summary_df) > 0:
         & summary_df["mod"].isin(plot_mods)
         & summary_df["isa_dev"].isin(plot_isa)
     ].copy()
-    # Determine whether this dataset contains IAS (turboprops) or Mach (jets)
-    # Presence of a numeric 'kias' column indicates IAS mode
+    # Determine whether this dataset contains TAS/IAS (turboprops) or Mach (jets)
+    has_ktas_global = ("ktas" in filtered.columns) and pd.to_numeric(filtered.get("ktas"), errors="coerce").notna().any()
     has_kias_global = ("kias" in filtered.columns) and pd.to_numeric(filtered.get("kias"), errors="coerce").notna().any()
-    speed_col_global = "kias" if has_kias_global else "mach"
+    speed_col_global = "ktas" if has_ktas_global else ("kias" if has_kias_global else "mach")
 
     # Payload-Range Curves
     if "Payload-Range Curves" in plot_choices:
@@ -298,10 +301,13 @@ if summary_df is not None and len(summary_df) > 0:
             else:
                 sel_alt = None
         with col2:
+            has_ktas = ("ktas" in filtered.columns) and pd.to_numeric(filtered.get("ktas"), errors="coerce").notna().any()
             has_kias = ("kias" in filtered.columns) and pd.to_numeric(filtered.get("kias"), errors="coerce").notna().any()
-            speed_col = "kias" if has_kias else "mach"
-            speed_label = "IAS (kts)" if speed_col == "kias" else "Mach"
-            if speed_col == "kias":
+            speed_col = "ktas" if has_ktas else ("kias" if has_kias else "mach")
+            speed_label = "TAS (kts)" if speed_col == "ktas" else ("IAS (kts)" if speed_col == "kias" else "Mach")
+            if speed_col == "ktas":
+                speed_options = sorted(pd.to_numeric(filtered["ktas"], errors="coerce").dropna().unique().tolist(), reverse=True)
+            elif speed_col == "kias":
                 speed_options = sorted(pd.to_numeric(filtered["kias"], errors="coerce").dropna().unique().tolist(), reverse=True)
             else:
                 speed_options = sorted(pd.to_numeric(filtered["mach"], errors="coerce").dropna().unique().tolist(), reverse=True)
@@ -313,6 +319,8 @@ if summary_df is not None and len(summary_df) > 0:
         if sel_alt is not None and sel_speed is not None:
             if speed_col == "mach":
                 df_pr = filtered[(filtered["cruise_alt"] == sel_alt) & (np.isclose(pd.to_numeric(filtered["mach"], errors="coerce"), float(sel_speed)))]
+            elif speed_col == "ktas":
+                df_pr = filtered[(filtered["cruise_alt"] == sel_alt) & (np.isclose(pd.to_numeric(filtered["ktas"], errors="coerce"), float(sel_speed)))]
             else:
                 df_pr = filtered[(filtered["cruise_alt"] == sel_alt) & (pd.to_numeric(filtered["kias"], errors="coerce") == int(sel_speed))]
             if len(df_pr) > 0:
@@ -363,7 +371,11 @@ if summary_df is not None and len(summary_df) > 0:
                                 line=dict(color=color_map.get(mod, None), dash=("dash" if dev == -10 else "solid" if dev == 0 else "dot" if dev == 10 else "dashdot"))
                             ))
                 fig.update_layout(
-                    title=(f"Payload-Range at FL{int(sel_alt/100):.0f}, M {float(sel_speed):.2f}" if speed_col == "mach" else f"Payload-Range at FL{int(sel_alt/100):.0f}, IAS {int(sel_speed)} kt"),
+                    title=(
+                        f"Payload-Range at FL{int(sel_alt/100):.0f}, M {float(sel_speed):.2f}" if speed_col == "mach" else (
+                        f"Payload-Range at FL{int(sel_alt/100):.0f}, TAS {int(sel_speed)} kt" if speed_col == "ktas" else 
+                        f"Payload-Range at FL{int(sel_alt/100):.0f}, IAS {int(sel_speed)} kt"
+                    )),
                     xaxis_title="Range (NM)",
                     yaxis_title="Payload (lb)",
                     template="plotly_white",
@@ -386,10 +398,11 @@ if summary_df is not None and len(summary_df) > 0:
                 # Create ISA deviation labels for better legend
                 df_mach = df_mach.copy()
                 df_mach.loc[:, "isa_label"] = df_mach["isa_dev"].apply(lambda x: f"ISA {x:+d}°C")
+                has_ktas = ("ktas" in df_mach.columns) and pd.to_numeric(df_mach.get("ktas"), errors="coerce").notna().any()
                 has_kias = ("kias" in df_mach.columns) and pd.to_numeric(df_mach.get("kias"), errors="coerce").notna().any()
-                speed_col = "kias" if has_kias else "mach"
-                x_label = "IAS (kts)" if speed_col == "kias" else "Mach"
-                title_txt = f"Max Range vs {'IAS' if speed_col=='kias' else 'Mach'} at FL{int(sel_alt/100):.0f}"
+                speed_col = "ktas" if has_ktas else ("kias" if has_kias else "mach")
+                x_label = "TAS (kts)" if speed_col == "ktas" else ("IAS (kts)" if speed_col == "kias" else "Mach")
+                title_txt = f"Max Range vs {'TAS' if speed_col=='ktas' else ('IAS' if speed_col=='kias' else 'Mach')} at FL{int(sel_alt/100):.0f}"
                 fig = px.line(
                     df_mach,
                     x=speed_col,
@@ -419,10 +432,11 @@ if summary_df is not None and len(summary_df) > 0:
                 # Create ISA deviation labels for better legend
                 df_end = df_end.copy()
                 df_end.loc[:, "isa_label"] = df_end["isa_dev"].apply(lambda x: f"ISA {x:+d}°C")
+                has_ktas = ("ktas" in df_end.columns) and pd.to_numeric(df_end.get("ktas"), errors="coerce").notna().any()
                 has_kias = ("kias" in df_end.columns) and pd.to_numeric(df_end.get("kias"), errors="coerce").notna().any()
-                speed_col = "kias" if has_kias else "mach"
-                x_label = "IAS (kts)" if speed_col == "kias" else "Mach"
-                title_txt = f"Max Endurance vs {'IAS' if speed_col=='kias' else 'Mach'} at FL{int(sel_alt/100):.0f}"
+                speed_col = "ktas" if has_ktas else ("kias" if has_kias else "mach")
+                x_label = "TAS (kts)" if speed_col == "ktas" else ("IAS (kts)" if speed_col == "kias" else "Mach")
+                title_txt = f"Max Endurance vs {'TAS' if speed_col=='ktas' else ('IAS' if speed_col=='kias' else 'Mach')} at FL{int(sel_alt/100):.0f}"
                 fig = px.line(
                     df_end,
                     x=speed_col,
@@ -442,11 +456,14 @@ if summary_df is not None and len(summary_df) > 0:
     # Max Range vs Altitude (payload = 0)
     if "Max Range vs Altitude" in plot_choices:
         st.subheader("Max Range vs Altitude (Payload = 0)")
-        # Choose speed (Mach for jets, IAS for turboprops)
+        # Choose speed (Mach for jets, TAS for turboprops)
+        has_ktas = ("ktas" in filtered.columns) and pd.to_numeric(filtered.get("ktas"), errors="coerce").notna().any()
         has_kias = ("kias" in filtered.columns) and pd.to_numeric(filtered.get("kias"), errors="coerce").notna().any()
-        speed_col = "kias" if has_kias else "mach"
-        speed_label = "IAS (kts)" if speed_col == "kias" else "Mach"
-        if has_kias:
+        speed_col = "ktas" if has_ktas else ("kias" if has_kias else "mach")
+        speed_label = "TAS (kts)" if speed_col == "ktas" else ("IAS (kts)" if speed_col == "kias" else "Mach")
+        if speed_col == "ktas":
+            speed_options = sorted(pd.to_numeric(filtered["ktas"], errors="coerce").dropna().unique().tolist(), reverse=True)
+        elif speed_col == "kias":
             speed_options = sorted(pd.to_numeric(filtered["kias"], errors="coerce").dropna().unique().tolist(), reverse=True)
         else:
             speed_options = sorted(pd.to_numeric(filtered["mach"], errors="coerce").dropna().unique().tolist(), reverse=True)
@@ -454,13 +471,19 @@ if summary_df is not None and len(summary_df) > 0:
             sel_speed = st.selectbox(f"{speed_label} for Range vs Altitude", options=speed_options, key="rva_speed")
             if speed_col == "mach":
                 df_alt = filtered[(filtered["payload"] == 0) & (np.isclose(pd.to_numeric(filtered["mach"], errors="coerce"), float(sel_speed)))]
+            elif speed_col == "ktas":
+                df_alt = filtered[(filtered["payload"] == 0) & (np.isclose(pd.to_numeric(filtered["ktas"], errors="coerce"), float(sel_speed)))]
             else:
                 df_alt = filtered[(filtered["payload"] == 0) & (pd.to_numeric(filtered["kias"], errors="coerce") == int(sel_speed))]
             if len(df_alt) > 0:
                 # Create ISA deviation labels for better legend
                 df_alt = df_alt.copy()
                 df_alt.loc[:, "isa_label"] = df_alt["isa_dev"].apply(lambda x: f"ISA {x:+d}°C")
-                title_txt = f"Max Range vs Altitude at M {float(sel_speed):.2f}" if speed_col == "mach" else f"Max Range vs Altitude at IAS {int(sel_speed)} kt"
+                title_txt = (
+                    f"Max Range vs Altitude at M {float(sel_speed):.2f}" if speed_col == "mach" else (
+                    f"Max Range vs Altitude at TAS {int(sel_speed)} kt" if speed_col == "ktas" else 
+                    f"Max Range vs Altitude at IAS {int(sel_speed)} kt"
+                ))
                 fig = px.line(
                     df_alt,
                     x="cruise_alt",

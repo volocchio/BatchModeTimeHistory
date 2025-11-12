@@ -13,6 +13,7 @@ try:
 except ImportError:
     TURBOPROP_PARAMS = {}
 from simulation import run_simulation
+from flight_physics import atmos
 
 
 def build_mach_grid(mmo: float) -> list[float]:
@@ -57,6 +58,21 @@ def payload_sweep(max_payload_lb: float, num_steps: int) -> list[int]:
 def compute_initial_fuel(max_fuel: float, mrw: float, bow: float, payload: float) -> float:
     max_fuel_by_weight = mrw - (bow + payload)
     return float(max(0.0, min(max_fuel, max_fuel_by_weight)))
+
+
+def kias_from_tas(ktas: float, cruise_alt_ft: int, isa_dev_c: float) -> float:
+    """Convert target TAS (ktas) to IAS (kias) at given altitude and ISA deviation.
+    Uses same compressibility model as physics(): IAS -> EAS correction inverted.
+    """
+    try:
+        _, _, sigma, delta, _, c = atmos(float(cruise_alt_ft), float(isa_dev_c))
+        m = float(ktas) / float(c) if c and c > 0 else 0.0
+        correction = 1 + 1/8 * (1 - delta) * m ** 2 + 3/640 * (1 - 10 * delta + 9 * delta ** 2) * m ** 4
+        vkeas = float(ktas) * np.sqrt(sigma)
+        vkias = float(vkeas) * float(correction)
+        return float(vkias)
+    except Exception:
+        return float(ktas)  # Fallback: treat TAS as IAS if conversion fails
 
 
 def run_single_case(case: dict, hide_mach_limited: bool = False, hide_altitude_limited: bool = False) -> dict:
@@ -271,6 +287,7 @@ def run_payload_range_batch(
     output_dir: str | Path | None = None,
     mach_values: list[float] | None = None,
     kias_values: list[float] | None = None,
+    tas_values: list[float] | None = None,
     alt_values: list[int] | None = None,
     save_timeseries: bool = False,
     save_summary_plots: bool = True,
@@ -305,7 +322,8 @@ def run_payload_range_batch(
             mmo = float(ac[25])
             bow = float(ac[18])
             mzfw = float(ac[19])
-            reserve_default = int(ac[24])
+            is_turboprop = aircraft in TURBOPROP_PARAMS
+            reserve_default = 230 if is_turboprop else int(ac[24])
             max_payload = max(0.0, mzfw - bow)
             # Determine grids (use overrides if provided, filter by limits)
             if alt_values:
@@ -322,15 +340,46 @@ def run_payload_range_batch(
             else:
                 mach_grid = build_mach_grid(mmo)
             kias_grid = None
-            is_turboprop = aircraft in TURBOPROP_PARAMS
+            tas_grid = None
             if is_turboprop and kias_values:
                 kias_grid = sorted({float(kv) for kv in kias_values if 60.0 <= float(kv) <= 300.0}, reverse=True)
                 if len(kias_grid) == 0:
                     kias_grid = None
+            if is_turboprop and 'tas_values' in locals() and tas_values:
+                tas_grid = sorted({float(tv) for tv in tas_values if 60.0 <= float(tv) <= 300.0}, reverse=True)
+                if len(tas_grid) == 0:
+                    tas_grid = None
 
             payloads = payload_sweep(max_payload, payload_steps)
 
-            if kias_grid is not None:
+            if tas_grid is not None:
+                for flap, isa_dev, cruise_alt, ktas, payload in product(
+                    flap_settings, isa_devs, alt_grid, tas_grid, payloads
+                ):
+                    kias_conv = kias_from_tas(float(ktas), int(cruise_alt), float(isa_dev))
+                    case = {
+                        "aircraft": aircraft,
+                        "mod": mod,
+                        "flap": int(flap),
+                        "isa_dev": int(isa_dev),
+                        "cruise_alt": int(cruise_alt),
+                        "mach": 0.0,
+                        "kias": float(kias_conv),
+                        "ktas": float(ktas),
+                        "payload": int(payload),
+                        "taxi_fuel": (15 if is_turboprop else int(taxi_fuel_lb)),
+                        "reserve_fuel": int(reserve_default),
+                        "save_plot": bool(save_plots),
+                    }
+                    if save_plots:
+                        plot_name = f"fuel_vs_distance_{aircraft}_{mod}_flap{flap}_tas{int(ktas)}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.png"
+                        case["plot_path"] = aircraft_dirs[aircraft]["plots"] / plot_name
+                    if save_timeseries:
+                        ts_name = f"timeseries_{aircraft}_{mod}_flap{flap}_tas{int(ktas)}_alt{cruise_alt}_isa{isa_dev}_payload{payload}.parquet"
+                        case["timeseries_path"] = aircraft_dirs[aircraft]["timeseries"] / ts_name
+                        case["save_timeseries"] = True
+                    cases.append(case)
+            elif kias_grid is not None:
                 for flap, isa_dev, cruise_alt, kias, payload in product(
                     flap_settings, isa_devs, alt_grid, kias_grid, payloads
                 ):
@@ -343,7 +392,7 @@ def run_payload_range_batch(
                         "mach": 0.0,
                         "kias": float(kias),
                         "payload": int(payload),
-                        "taxi_fuel": int(taxi_fuel_lb),
+                        "taxi_fuel": (15 if is_turboprop else int(taxi_fuel_lb)),
                         "reserve_fuel": int(reserve_default),
                         "save_plot": bool(save_plots),
                     }
@@ -415,7 +464,9 @@ def run_payload_range_batch(
             for _c in cols0:
                 if _c in display_df.columns:
                     _num = pd.to_numeric(display_df[_c], errors="coerce")
-                    display_df.loc[_num.notna(), _c] = _num.round(0).astype(int)
+                    _num = _num.replace([np.inf, -np.inf], np.nan)
+                    _mask = _num.notna()
+                    display_df.loc[_mask, _c] = _num[_mask].round(0).astype(int)
             
             # Save CSV and parquet
             display_df.to_csv(aircraft_dir / "summary.csv", index=False)
@@ -435,7 +486,9 @@ def run_payload_range_batch(
     for _c in cols0:
         if _c in display_df2.columns:
             _num = pd.to_numeric(display_df2[_c], errors="coerce")
-            display_df2.loc[_num.notna(), _c] = _num.round(0).astype(int)
+            _num = _num.replace([np.inf, -np.inf], np.nan)
+            _mask = _num.notna()
+            display_df2.loc[_mask, _c] = _num[_mask].round(0).astype(int)
     display_df2.to_csv(base_ts_dir / "combined_summary.csv", index=False)
     try:
         df_sorted.to_parquet(base_ts_dir / "combined_summary.parquet", index=False)
@@ -533,14 +586,19 @@ def run_payload_range_batch(
                 aircraft_summary_dir = aircraft_dirs[aircraft]["summary_plots"]
                 
                 for alt in sorted(df_a["cruise_alt"].dropna().unique(), reverse=True):
-                    # Decide whether this aircraft dataset uses IAS (turboprops) or Mach (jets)
+                    # Prefer TAS for turboprops, then IAS, else Mach
+                    has_ktas = ("ktas" in df_a.columns) and pd.to_numeric(df_a.get("ktas"), errors="coerce").notna().any()
                     has_kias = ("kias" in df_a.columns) and pd.to_numeric(df_a.get("kias"), errors="coerce").notna().any()
-                    if has_kias:
+                    if has_ktas:
+                        speeds = sorted(pd.to_numeric(df_a["ktas"], errors="coerce").dropna().unique().tolist(), reverse=True)
+                    elif has_kias:
                         speeds = sorted(pd.to_numeric(df_a["kias"], errors="coerce").dropna().unique().tolist(), reverse=True)
                     else:
                         speeds = sorted(pd.to_numeric(df_a["mach"], errors="coerce").dropna().unique().tolist(), reverse=True)
                     for spd in speeds:
-                        if has_kias:
+                        if has_ktas:
+                            df_filtered = df_a[(df_a["cruise_alt"] == alt) & (np.isclose(pd.to_numeric(df_a["ktas"], errors="coerce"), float(spd)))]
+                        elif has_kias:
                             df_filtered = df_a[(df_a["cruise_alt"] == alt) & (pd.to_numeric(df_a["kias"], errors="coerce") == int(spd))]
                         else:
                             df_filtered = df_a[(df_a["cruise_alt"] == alt) & (np.isclose(pd.to_numeric(df_a["mach"], errors="coerce"), float(spd)))]
@@ -596,14 +654,20 @@ def run_payload_range_batch(
                                     name=f"{mod_name} - {isa_label}",
                                     line=dict(color=color, dash=("dash" if isa_dev == -10 else "solid" if isa_dev == 0 else "dot" if isa_dev == 10 else "dashdot"))
                                 ))
-                        title_txt = (f"Payload-Range | {aircraft} | FL{int(alt/100)} | IAS {int(spd)} kt" if has_kias else f"Payload-Range | {aircraft} | FL{int(alt/100)} | M {float(spd):.2f}")
+                        title_txt = (
+                            f"Payload-Range | {aircraft} | FL{int(alt/100)} | TAS {float(spd):.0f} kt" if has_ktas else (
+                            f"Payload-Range | {aircraft} | FL{int(alt/100)} | IAS {int(spd)} kt" if has_kias else 
+                            f"Payload-Range | {aircraft} | FL{int(alt/100)} | M {float(spd):.2f}"
+                        ))
                         fig.update_layout(
                             title=title_txt,
                             xaxis_title="Range (NM)",
                             yaxis_title="Payload (lb)",
                             template="plotly_white"
                         )
-                        if has_kias:
+                        if has_ktas:
+                            fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_tas{int(spd)}.png"
+                        elif has_kias:
                             fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_kias{int(spd)}.png"
                         else:
                             fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_mach{float(spd):.2f}.png"
@@ -618,11 +682,12 @@ def run_payload_range_batch(
                     if df_alt.empty:
                         continue
                     
-                    # Decide IAS vs Mach
+                    # Decide TAS vs IAS vs Mach
+                    has_ktas = ("ktas" in df_alt.columns) and pd.to_numeric(df_alt.get("ktas"), errors="coerce").notna().any()
                     has_kias = ("kias" in df_alt.columns) and pd.to_numeric(df_alt.get("kias"), errors="coerce").notna().any()
-                    x_col = "kias" if has_kias else "mach"
-                    x_label = "IAS (kts)" if has_kias else "Mach"
-                    title_txt = f"Range vs {'IAS' if has_kias else 'Mach'} (Payload=0) | {aircraft} | FL{int(alt/100)}"
+                    x_col = "ktas" if has_ktas else ("kias" if has_kias else "mach")
+                    x_label = "TAS (kts)" if x_col == "ktas" else ("IAS (kts)" if x_col == "kias" else "Mach")
+                    title_txt = f"Range vs {'TAS' if x_col=='ktas' else ('IAS' if x_col=='kias' else 'Mach')} (Payload=0) | {aircraft} | FL{int(alt/100)}"
 
                     # Create ISA deviation labels for better legend
                     df_alt = df_alt.copy()
@@ -667,14 +732,19 @@ def run_payload_range_batch(
                 aircraft_summary_dir = aircraft_dirs[aircraft]["summary_plots"]
                 
                 # Decide speed dimension
+                has_ktas = ("ktas" in df_a0.columns) and pd.to_numeric(df_a0.get("ktas"), errors="coerce").notna().any()
                 has_kias = ("kias" in df_a0.columns) and pd.to_numeric(df_a0.get("kias"), errors="coerce").notna().any()
-                if has_kias:
+                if has_ktas:
+                    speeds = sorted(pd.to_numeric(df_a0["ktas"], errors="coerce").dropna().unique().tolist(), reverse=True)
+                elif has_kias:
                     speeds = sorted(pd.to_numeric(df_a0["kias"], errors="coerce").dropna().unique().tolist(), reverse=True)
                 else:
                     speeds = sorted(pd.to_numeric(df_a0["mach"], errors="coerce").dropna().unique().tolist(), reverse=True)
                 
                 for spd in speeds:
-                    if has_kias:
+                    if has_ktas:
+                        df_spd = df_a0[np.isclose(pd.to_numeric(df_a0["ktas"], errors="coerce"), float(spd))]
+                    elif has_kias:
                         df_spd = df_a0[pd.to_numeric(df_a0["kias"], errors="coerce") == int(spd)]
                     else:
                         df_spd = df_a0[np.isclose(pd.to_numeric(df_a0["mach"], errors="coerce"), float(spd))]
@@ -701,7 +771,7 @@ def run_payload_range_batch(
                             
                             df_plot = df_isa.sort_values("cruise_alt")
                             isa_label = f"ISA {isa_dev:+d}°C"
-                            speed_label = (f"IAS {int(spd)} kt" if has_kias else f"M {float(spd):.2f}")
+                            speed_label = (f"TAS {int(spd)} kt" if has_ktas else (f"IAS {int(spd)} kt" if has_kias else f"M {float(spd):.2f}"))
                             
                             fig.add_trace(go.Scatter(
                                 x=pd.to_numeric(df_plot["cruise_alt"], errors="coerce"), 
@@ -711,7 +781,7 @@ def run_payload_range_batch(
                                 line=dict(color=color, dash=("dash" if isa_dev == -10 else "solid" if isa_dev == 0 else "dot" if isa_dev == 10 else "dashdot"))
                             ))
                     
-                    title_txt = f"Range vs Altitude (Payload=0) | {aircraft} | {('IAS ' + str(int(spd)) + ' kt') if has_kias else ('M ' + format(float(spd), '.2f'))}"
+                    title_txt = f"Range vs Altitude (Payload=0) | {aircraft} | {('TAS ' + str(int(spd)) + ' kt') if has_ktas else (('IAS ' + str(int(spd)) + ' kt') if has_kias else ('M ' + format(float(spd), '.2f')))}"
                     fig.update_layout(
                         title=title_txt,
                         xaxis_title="Altitude (ft)",
@@ -738,6 +808,7 @@ def parse_args():
     p.add_argument("--parallel", type=int, default=6)
     p.add_argument("--mach", nargs="*", type=float, default=None, help="Optional custom Mach values (e.g., --mach 0.70 0.69 0.68)")
     p.add_argument("--kias", nargs="*", type=float, default=None, help="Optional IAS values for turboprops in kts (e.g., --kias 170 160 150)")
+    p.add_argument("--tas", nargs="*", type=float, default=None, help="Optional TAS values for turboprops in kts (e.g., --tas 170 160 150)")
     p.add_argument("--alts", nargs="*", type=int, default=None, help="Optional custom altitudes in ft (e.g., --alts 41000 39000 35000)")
     p.add_argument("--no-plots", action="store_true", help="Disable per-run PNG plot export (fuel vs distance)")
     p.add_argument("--no-summary-plots", action="store_true", help="Disable summary PNG plots (payload-range and family plots)")
@@ -759,6 +830,7 @@ def main():
         output_dir=args.out,
         mach_values=args.mach,
         kias_values=args.kias,
+        tas_values=args.tas,
         alt_values=args.alts,
         save_summary_plots=not args.no_summary_plots,
     )
