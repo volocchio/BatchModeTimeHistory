@@ -1,0 +1,323 @@
+import os
+import base64
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+from aircraft_config import AIRCRAFT_CONFIG
+from utils import load_airports
+from simulation import run_simulation, haversine_with_bearing, reset_output_timestamp, get_global_timestamp
+from display import (
+    display_simulation_results, build_route_map_figure, build_fuel_remaining_figure,
+    build_alt_mach_profile_figure, build_alt_tas_ias_profile_figure,
+    build_roc_figure, build_thrust_figure, build_drag_figure
+)
+
+# --- Optional PDF Dependencies ---
+try:
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    from reportlab.lib.pagesizes import letter
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
+
+# --- Streamlit Page Config ---
+st.set_page_config(page_title="Flight Simulation", layout="wide")
+st.title("Flight Simulation App")
+st.markdown("""
+This app simulates a flight between two airports using a specified aircraft model.
+It calculates flight parameters such as altitude, speed, thrust, and drag over time,
+and visualizes the flight profile with charts.
+""")
+
+# --- Load Airports ---
+airports_df = load_airports()
+if 'display_name' not in airports_df.columns or 'ident' not in airports_df.columns:
+    st.error("Error: Required columns not found in airports data")
+    st.stop()
+
+display_name_mapping = {name.upper(): name for name in airports_df["display_name"].unique()}
+airport_display_names = list(display_name_mapping.values())
+display_name_to_info = {row["display_name"]: row for _, row in airports_df.iterrows()}
+
+# --- Initialize Session State (MUST BE AT TOP, BEFORE ANY INPUT) ---
+if 'payload_flatwing' not in st.session_state:
+    st.session_state.payload_flatwing = 0
+if 'payload_tamarack' not in st.session_state:
+    st.session_state.payload_tamarack = 0
+if 'initial_fuel_flatwing' not in st.session_state:
+    st.session_state.initial_fuel_flatwing = 3000
+if 'initial_fuel_tamarack' not in st.session_state:
+    st.session_state.initial_fuel_tamarack = 3000
+if 'last_aircraft' not in st.session_state:
+    st.session_state.last_aircraft = None
+
+# --- Sidebar Inputs ---
+with st.sidebar:
+    st.header("Flight Parameters")
+    
+    aircraft_types = ["CJ", "CJ1", "CJ1+", "M2", "CJ2", "CJ2+", "CJ3", "CJ3+", "C208", "C208B", "C208EX"]
+    aircraft_model = st.selectbox("Aircraft Model", aircraft_types, index=aircraft_types.index("CJ1") if "CJ1" in aircraft_types else 0)
+
+    # Reset payloads/fuel when aircraft changes
+    if st.session_state.last_aircraft != aircraft_model:
+        st.session_state.last_aircraft = aircraft_model
+        st.session_state.payload_flatwing = 0
+        st.session_state.payload_tamarack = 0
+        st.session_state.initial_fuel_flatwing = 3000
+        st.session_state.initial_fuel_tamarack = 3000
+
+    # Aircraft images
+    def show_img(prefix, caption):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        images_dir = os.path.join(base_dir, "images")
+        base = os.path.join(images_dir, f"{prefix}_{aircraft_model}")
+        candidates = [base + ext for ext in [".jpg", ".png", ".jpeg", ".webp"]]
+        p = next((c for c in candidates if os.path.isfile(c)), None)
+        if not p:
+            st.info(f"{caption} image not available")
+            return
+        try:
+            if PIL_AVAILABLE:
+                with Image.open(p) as im:
+                    st.image(im, caption=caption, use_container_width=True)
+            else:
+                st.image(p, caption=caption, use_container_width=True)
+        except Exception:
+            st.image(p, caption=caption, use_container_width=True)
+
+    show_img("tamarack", f"Tamarack {aircraft_model}")
+    show_img("flatwing", f"Flatwing {aircraft_model}")
+
+    mods_available = [m for (a, m) in AIRCRAFT_CONFIG if a == aircraft_model]
+    if not mods_available:
+        st.error(f"No modifications available for {aircraft_model}.")
+        st.stop()
+
+    wing_type = st.radio("Wing Configuration", ["Flatwing", "Tamarack", "Comparison"], horizontal=True)
+    dep_airport_input = st.text_input("Departure Airport (ICAO or Name)", value="KSZT")
+    arr_airport_input = st.text_input("Arrival Airport (ICAO or Name)", value="KSAN")
+    isa_dev = st.slider("ISA Deviation (°C)", min_value=-30, max_value=40, value=0, step=5)
+    winds_temps_source = st.selectbox("Winds/Temps Source", ["No Wind", "Model Data", "Custom"], index=0)
+
+    # --- Weight Inputs (Using key= to auto-manage session_state) ---
+    st.subheader("Weight Configuration")
+    config_flat = AIRCRAFT_CONFIG.get((aircraft_model, 'Flatwing'))
+    config_tam = AIRCRAFT_CONFIG.get((aircraft_model, 'Tamarack')) if 'Tamarack' in mods_available else None
+
+    bow_flat = config_flat[18] if config_flat else 0
+    bow_tam = config_tam[18] if config_tam else bow_flat
+    max_fuel = config_flat[22] if config_flat else 3000
+
+    payload_flat = st.number_input("Payload (Flatwing) (lb)", min_value=0, value=st.session_state.payload_flatwing, key="payload_flatwing")
+    if wing_type in ["Tamarack", "Comparison"]:
+        payload_tam = st.number_input("Payload (Tamarack) (lb)", min_value=0, value=st.session_state.payload_tamarack, key="payload_tamarack")
+    else:
+        payload_tam = payload_flat
+
+    initial_fuel_flat = st.slider("Initial Fuel (Flatwing) (lb)", 0, int(max_fuel), st.session_state.initial_fuel_flatwing, key="initial_fuel_flatwing")
+    if wing_type in ["Tamarack", "Comparison"]:
+        initial_fuel_tam = st.slider("Initial Fuel (Tamarack) (lb)", 0, int(max_fuel), st.session_state.initial_fuel_tamarack, key="initial_fuel_tamarack")
+    else:
+        initial_fuel_tam = initial_fuel_flat
+
+    cruise_alt = st.number_input("Cruise Altitude (ft)", min_value=5000, max_value=45000, value=41000, step=1000)
+    v1_cut_enabled = st.checkbox("Enable V1 Cut Simulation", value=False)
+
+    run_button = st.button("Run Simulation", type="primary")
+
+# --- Main Simulation ---
+if run_button:
+    reset_output_timestamp()
+    timestamp = get_global_timestamp()
+    output_dir = os.path.join("single_output", timestamp)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Airport Lookup ---
+    dep_input = dep_airport_input.strip().upper()
+    arr_input = arr_airport_input.strip().upper()
+
+    dep_match = [name for name in airport_display_names if dep_input in name.upper()]
+    arr_match = [name for name in airport_display_names if arr_input in name.upper()]
+
+    if not dep_match or not arr_match:
+        st.error("Airport not found. Try ICAO code or full name.")
+        st.stop()
+
+    dep_airport = display_name_to_info[dep_match[0]]
+    arr_airport = display_name_to_info[arr_match[0]]
+
+    dep_airport_code = dep_airport["ident"]
+    arr_airport_code = arr_airport["ident"]
+    dep_latitude = dep_airport["latitude_deg"]
+    dep_longitude = dep_airport["longitude_deg"]
+    arr_latitude = arr_airport["latitude_deg"]
+    arr_longitude = arr_airport["longitude_deg"]
+
+    distance_nm, bearing_deg = haversine_with_bearing(dep_latitude, dep_longitude, arr_latitude, arr_longitude)
+
+    st.success(f"Route: {dep_airport_code} to {arr_airport_code} | {distance_nm:.1f} NM | Bearing: {bearing_deg:.1f}°")
+
+    # --- Run Simulations ---
+    results = {}
+    data_frames = {}
+    img_paths = []
+
+    mods_to_run = ["Flatwing", "Tamarack"] if wing_type == "Comparison" else [wing_type]
+
+    for mod in mods_to_run:
+        payload = payload_tam if mod == "Tamarack" else payload_flat
+        initial_fuel = initial_fuel_tam if mod == "Tamarack" else initial_fuel_flat
+
+        with st.spinner(f"Simulating {mod}..."):
+            df, final_res, _, _, _, _ = run_simulation(
+                aircraft=aircraft_model,
+                mod=mod,
+                dep_lat=dep_latitude, dep_lon=dep_longitude,
+                arr_lat=arr_latitude, arr_lon=arr_longitude,
+                isa_dev_c=isa_dev,
+                payload=payload,
+                initial_fuel=initial_fuel,
+                cruise_alt=cruise_alt,
+                v1_cut_enabled=v1_cut_enabled,
+                winds_temps_source=winds_temps_source,
+                write_output_file=False
+            )
+            results[mod] = final_res
+            data_frames[mod] = df
+
+            # Save plots
+            fig_map = build_route_map_figure(dep_latitude, dep_longitude, arr_latitude, arr_longitude, dep_airport_code, arr_airport_code, distance_nm)
+            fig_fuel = build_fuel_remaining_figure(df, initial_fuel)
+            fig_alt_mach = build_alt_mach_profile_figure(data_frames.get("Tamarack", pd.DataFrame()), data_frames.get("Flatwing", pd.DataFrame()))
+            fig_alt_tas = build_alt_tas_ias_profile_figure(data_frames.get("Tamarack", pd.DataFrame()), data_frames.get("Flatwing", pd.DataFrame()))
+
+            map_path = os.path.join(output_dir, f"map_{mod}.png")
+            fuel_path = os.path.join(output_dir, f"fuel_{mod}.png")
+            alt_mach_path = os.path.join(output_dir, f"alt_mach_{mod}.png")
+            alt_tas_path = os.path.join(output_dir, f"alt_tas_{mod}.png")
+
+            fig_map.write_image(map_path, width=800, height=600)
+            fig_fuel.write_image(fuel_path, width=800, height=500)
+            fig_alt_mach.write_image(alt_mach_path, width=800, height=500)
+            fig_alt_tas.write_image(alt_tas_path, width=800, height=500)
+
+            img_paths.extend([
+                ("Route Map", map_path),
+                ("Fuel Remaining vs Distance", fuel_path),
+                ("Altitude and Mach vs Distance", alt_mach_path),
+                ("Altitude, TAS and IAS vs Distance", alt_tas_path)
+            ])
+
+    # --- Display Results ---
+    for mod in results:
+        st.markdown(f"## {mod} Results")
+        display_simulation_results(results[mod], mod)
+
+    # --- PDF Export ---
+    if REPORTLAB_AVAILABLE:
+        try:
+            pdf_name = f"summary_{aircraft_model}_{wing_type}_{dep_airport_code}_to_{arr_airport_code}.pdf"
+            pdf_path = os.path.join(output_dir, pdf_name)
+
+            doc = SimpleDocTemplate(pdf_path, pagesize=letter, rightMargin=0.75*inch, leftMargin=0.75*inch,
+                                    topMargin=1*inch, bottomMargin=0.75*inch)
+            styles = getSampleStyleSheet()
+            styles.add(ParagraphStyle(name='TitleCenter', parent=styles['Title'], alignment=1, fontSize=18))
+            styles.add(ParagraphStyle(name='Caption', fontSize=9, alignment=1, spaceAfter=6))
+            styles.add(ParagraphStyle(name='MetricLabel', fontSize=10, leading=12))
+
+            story = []
+
+            def header_footer(canvas, doc):
+                canvas.saveState()
+                canvas.setFont('Helvetica', 8)
+                canvas.drawString(0.75*inch, letter[1] - 0.5*inch,
+                                  f"Flight Simulation: {aircraft_model} ({wing_type}) - {dep_airport_code} to {arr_airport_code}")
+                canvas.drawRightString(letter[0] - 0.75*inch, 0.5*inch,
+                                       f"Page {doc.page} | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                canvas.restoreState()
+
+            story.append(Paragraph("Flight Simulation Summary", styles['TitleCenter']))
+            story.append(Spacer(1, 0.3*inch))
+            story.append(Paragraph(f"<b>Aircraft:</b> {aircraft_model} | <b>Config:</b> {wing_type}", styles['Normal']))
+            story.append(Paragraph(f"<b>Route:</b> {dep_airport_code} to {arr_airport_code} | <b>Distance:</b> {distance_nm:.1f} NM", styles['Normal']))
+            story.append(Paragraph(f"<b>ISA Dev:</b> {isa_dev:+d}°C | <b>Winds:</b> {winds_temps_source}", styles['Normal']))
+            story.append(Spacer(1, 0.4*inch))
+
+            def add_results_table(res, title):
+                data = [[Paragraph(f"<b>{title}</b>", styles['MetricLabel']), ""]]
+                metrics = [
+                    ("Total Distance (NM)", "Total Dist (NM)"),
+                    ("Total Time (min)", "Total Time (min)"),
+                    ("Total Fuel Burned (lb)", "Total Fuel Burned (lb)"),
+                    ("Fuel Remaining (lb)", "Fuel Remaining (lb)"),
+                    ("Cruise TAS (kts)", "Cruise VKTAS (knots)"),
+                    ("First Level-Off Alt (ft)", "Cruise - First Level-Off Alt (ft)"),
+                ]
+                for label, key in metrics:
+                    val = res.get(key)
+                    if val is not None:
+                        data.append([Paragraph(label, styles['MetricLabel']), f"{val:,.1f}" if isinstance(val, (int, float)) else str(val)])
+                t = Table(data, colWidths=[4*inch, 2*inch])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2E86C1")),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                    ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 0.2*inch))
+
+            if wing_type != "Comparison":
+                add_results_table(results[wing_type], f"{wing_type} Summary")
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    add_results_table(results["Tamarack"], "Tamarack")
+                with col2:
+                    add_results_table(results["Flatwing"], "Flatwing")
+
+            story.append(PageBreak())
+
+            for title, path in img_paths:
+                try:
+                    safe_path = path
+                    if PIL_AVAILABLE:
+                        im = Image.open(path)
+                        if im.mode in ("RGBA", "LA", "P"):
+                            bg = Image.new("RGB", im.size, (255, 255, 255))
+                            if im.mode == "P":
+                                im = im.convert("RGBA")
+                            bg.paste(im, mask=im.split()[-1] if "A" in im.getbands() else None)
+                            safe_path = path.rsplit(".", 1)[0] + "_rgb.jpg"
+                            bg.save(safe_path, "JPEG", quality=95)
+                        elif im.mode != "RGB":
+                            safe_path = path.rsplit(".", 1)[0] + "_rgb.jpg"
+                            im.convert("RGB").save(safe_path, "JPEG", quality=95)
+                    img = RLImage(safe_path, width=6.5*inch, height=4*inch)
+                    img.hAlign = 'CENTER'
+                    story.append(Paragraph(title, styles['Heading2']))
+                    story.append(img)
+                    story.append(Paragraph(f"Source: {os.path.basename(path)}", styles['Caption']))
+                    story.append(Spacer(1, 0.3*inch))
+                except Exception as e:
+                    st.warning(f"Image {title} skipped: {e}")
+
+            doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
+            st.success(f"PDF generated: `{pdf_path}`")
+            with open(pdf_path, "rb") as f:
+                st.download_button("Download PDF Report", data=f.read(), file_name=pdf_name, mime="application/pdf")
+
+        except Exception as e:
+            st.error(f"PDF failed: {e}")
+    else:
+        st.warning("Install ReportLab: `pip install reportlab pillow`")

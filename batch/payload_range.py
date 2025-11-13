@@ -665,13 +665,71 @@ def run_payload_range_batch(
                             yaxis_title="Payload (lb)",
                             template="plotly_white"
                         )
+                        # Determine unique ISA values present in this slice
+                        isa_vals = sorted(pd.to_numeric(df_filtered["isa_dev"], errors="coerce").dropna().unique().tolist())
+                        multiple_isa = len(isa_vals) > 1
+                        # Build base filename components
                         if has_ktas:
-                            fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_tas{int(spd)}.png"
+                            base_name = f"payload_range_{aircraft}_alt{int(alt)}_tas{int(spd)}"
                         elif has_kias:
-                            fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_kias{int(spd)}.png"
+                            base_name = f"payload_range_{aircraft}_alt{int(alt)}_kias{int(spd)}"
                         else:
-                            fname = aircraft_summary_dir / f"payload_range_{aircraft}_alt{int(alt)}_mach{float(spd):.2f}.png"
-                        fig.write_image(str(fname), width=1400, height=900, scale=2)
+                            base_name = f"payload_range_{aircraft}_alt{int(alt)}_mach{float(spd):.2f}"
+                        # If multiple ISA, save combined plot; if single ISA, skip combined
+                        if multiple_isa:
+                            fname = aircraft_summary_dir / f"{base_name}.png"
+                            fig.write_image(str(fname), width=1400, height=900, scale=2)
+                        # Always save per-ISA plots; if only one ISA, this results in exactly one image
+                        for _isa in isa_vals:
+                            # Build a per-ISA figure
+                            import plotly.graph_objects as go  # local import safe in worker
+                            fig_isa = go.Figure()
+                            for _mod in sorted(df_filtered["mod"].unique()):
+                                df_mod = df_filtered[(df_filtered["mod"] == _mod) & (pd.to_numeric(df_filtered["isa_dev"], errors="coerce") == float(_isa))]
+                                if df_mod.empty:
+                                    continue
+                                df_plot = df_mod.sort_values("payload", ascending=False).copy()
+                                df_plot.loc[:, "total_dist_nm_num"] = pd.to_numeric(df_plot["total_dist_nm"], errors="coerce")
+                                df_plot = df_plot.dropna(subset=["total_dist_nm_num", "payload"]) 
+                                if df_plot.empty:
+                                    continue
+                                df_plot = df_plot.groupby("payload", as_index=False).agg(total_dist_nm_num=("total_dist_nm_num", "max"))
+                                df_plot = df_plot.sort_values("payload", ascending=False)
+                                x_vals = df_plot["total_dist_nm_num"].to_numpy()
+                                y_vals = df_plot["payload"].to_numpy()
+                                x_mon = np.maximum.accumulate(x_vals)
+                                if len(x_mon) >= 1:
+                                    x_plot = np.concatenate(([0.0], x_mon[:-1]))
+                                else:
+                                    x_plot = x_mon
+                                if len(x_plot) > 1:
+                                    keep = np.concatenate(((x_plot[:-1] < x_plot[1:] - 1e-9), [True]))
+                                    x_plot = x_plot[keep]
+                                    y_vals = y_vals[keep]
+                                color = "red" if _mod == "Flatwing" else "green"
+                                mod_name = "Baseline (Flatwing)" if _mod == "Flatwing" else "Modified (Tamarack)"
+                                fig_isa.add_trace(go.Scatter(
+                                    x=x_plot,
+                                    y=y_vals,
+                                    mode="lines",
+                                    name=f"{mod_name}",
+                                    line=dict(color=color)
+                                ))
+                            title_isa = (
+                                f"Payload-Range | {aircraft} | FL{int(alt/100)} | TAS {float(spd):.0f} kt — ISA {_isa:+.0f}°C" if has_ktas else (
+                                f"Payload-Range | {aircraft} | FL{int(alt/100)} | IAS {int(spd)} kt — ISA {_isa:+.0f}°C" if has_kias else 
+                                f"Payload-Range | {aircraft} | FL{int(alt/100)} | M {float(spd):.2f} — ISA {_isa:+.0f}°C"
+                            ))
+                            fig_isa.update_layout(
+                                title=title_isa,
+                                xaxis_title="Range (NM)",
+                                yaxis_title="Payload (lb)",
+                                template="plotly_white"
+                            )
+                            # Build filename and sanitize '+' only in filename, not full path
+                        file_name = f"{base_name}_ISA{_isa:+.0f}C.png".replace("+", "p")
+                        fname_isa = aircraft_summary_dir / file_name
+                        fig_isa.write_image(str(fname_isa), width=1400, height=900, scale=2)
             # Family: Range vs Speed by Altitude (payload 0) with ISA temperature separation
             for aircraft in sorted(df["aircraft"].dropna().unique()):
                 df_a0 = df[(df["aircraft"]==aircraft) & (df["payload"]==0)]
@@ -790,9 +848,9 @@ def run_payload_range_batch(
                     )
                     out_name = (f"range_vs_altitude_{aircraft}_IAS{int(spd)}.png" if has_kias else f"range_vs_altitude_{aircraft}_M{float(spd):.2f}.png")
                     fig.write_image(str(aircraft_summary_dir / out_name), width=1600, height=900, scale=2)
-        except Exception:
-            # Best-effort; ignore plotting errors to keep batch running
-            pass
+        except Exception as e:
+            import traceback
+            print("[summary_plots] Error while generating/saving plots:\n" + traceback.format_exc())
 
     return df
 

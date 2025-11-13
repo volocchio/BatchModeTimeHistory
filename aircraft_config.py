@@ -5,14 +5,52 @@ This module defines the AIRCRAFT_CONFIG dictionary, which contains configuration
 for different aircraft models and modifications.
 """
 
+# AIRCRAFT_CONFIG dictionary maps (aircraft, mod) tuples to configuration tuples.
+# Each configuration tuple contains the following parameters in order:
+# Index 0:  s           - Wing area (ft^2)
+# Index 1:  b           - Wing span (ft)
+# Index 2:  e           - Oswald efficiency factor
+# Index 3:  h           - Winglet height (ft)
+# Index 4:  sweep_25c   - Wing sweep at 25% chord (degrees)
+# Index 5:  SFC         - Specific Fuel Consumption (lb/hr/lb)
+# Index 6:  engines     - Number of engines
+# Index 7:  thrust_mult - Thrust multiplier (thrust per engine / reference thrust)
+# Index 8:  ceiling     - Service ceiling (ft)
+# Index 9:  CL0         - Zero-lift coefficient
+# Index 10: CLA         - Lift curve slope (1/rad)
+# Index 11: cdo         - Zero-lift drag coefficient
+# Index 12: dcdo_flap1  - Drag coefficient increment for takeoff flaps 15
+# Index 13: dcdo_flap2  - Drag coefficient increment for takeoff flaps 30
+# Index 14: dcdo_flap3  - Drag coefficient increment for ground flaps and spoilers 40
+# Index 15: dcdo_gear   - Drag coefficient increment for landing gear
+# Index 16: mu_to       - Rolling friction coefficient during takeoff
+# Index 17: mu_lnd      - Rolling friction coefficient during landing
+# Index 18: bow         - Basic Operating Weight (Empty Weight + pilot) (lb)
+# Index 19: MZFW        - Maximum Zero Fuel Weight (lb)
+# Index 20: MRW         - Maximum Ramp Weight (lb)
+# Index 21: MTOW        - Maximum Takeoff Weight (lb)
+# Index 22: max_fuel    - Maximum fuel capacity (lb)
+# Index 23: taxi_fuel   - Taxi fuel allowance (lb)
+# Index 24: reserve_fuel - Reserve fuel requirement (lb)
+# Index 25: mmo         - Maximum Mach number
+# Index 26: VMO         - Maximum Operating Speed (kts)
+# Index 27: Clmax       - Maximum lift coefficient (clean)
+# Index 28: Clmax_1     - Maximum lift coefficient (flaps 15)
+# Index 29: Clmax_2     - Maximum lift coefficient (flaps 40)
+# Index 30: M_climb     - Mach number for climb
+# Index 31: v_climb     - Climb speed (kts)
+# Index 32: roc_min     - Minimum rate of climb (ft/min)
+# Index 33: M_descent   - Mach number for descent
+# Index 34: v_descent   - Descent speed (kts)
+
 AIRCRAFT_CONFIG = {
-    ('CJ', 'Flatwing'): (240.0, 46.5, 0.75, 0.0, 0, 0.72, 2, 0.674, 41000.0, 0.2, 4.5, 0.027,
+    ('CJ', 'Flatwing'): (240.0, 46.5, 0.75, 0.0, 0, 0.72, 2, 0.674, 41000.0, 0.2, 4.5, 0.030,
                          0.01, 0.015, 0.011, 0.017, 0.015, 0.25,
                          6330.0,   # ← BEW 6160 + 170 pilot
                          8400, 10500.0, 10400.0,
                          3440.0, 100, 600, 0.7, 263, 1.35, 1.54, 1.75, 0.53, 200, 300, 0.7, 260),
 
-    ('CJ', 'Tamarack'): (250.0, 51.5, 0.8025, 3.0, 0, 0.72, 2, 0.674, 41000.0, 0.2, 4.5, 0.026244,
+    ('CJ', 'Tamarack'): (250.0, 51.5, 0.8025, 3.0, 0, 0.72, 2, 0.674, 41000.0, 0.2, 4.5, .03*0.026244/.27,
                          0.01, 0.015, 0.011, 0.017, 0.015, 0.25,
                          6405.0,   # ← BEW (6160 + 75) + 170 = 6405
                          8800, 10500.0, 10400.0,
